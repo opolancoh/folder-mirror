@@ -103,6 +103,97 @@ browser.
 
 Copy `mirror.example.toml` to `mirror.toml` and use `--profile <name>` (or `--config <file>`).
 
+## Testing
+
+Run the tests after every change, before committing. The release scripts also run them and refuse
+to build a version if anything fails.
+
+### Requirements
+
+- **Rust** (https://rustup.rs). It includes `cargo test` and `clippy`.
+- **On Windows:** the MSVC toolchain and the Visual Studio Build Tools (see [Building](#building)).
+- **For coverage only:** [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov), installed once:
+  ```bash
+  rustup component add llvm-tools-preview
+  ```
+  ```bash
+  cargo install cargo-llvm-cov
+  ```
+
+The tests create their own temporary folders and never touch your files or the real Recycle Bin.
+
+### Running the tests
+
+From the project folder, run both. Each must finish without errors:
+
+```bash
+cargo test
+```
+```bash
+cargo clippy --all-targets -- -D warnings
+```
+
+- `cargo test` ends with `test result: ok. N passed; 0 failed` for each group. Any `FAILED` line
+  names the test and shows the expected and actual values.
+- `clippy` checks code quality; `-D warnings` turns every warning into an error.
+
+To run part of the tests, filter by name:
+
+```bash
+cargo test deletes
+```
+```bash
+cargo test --test mirror
+```
+
+The first runs every test with "deletes" in its name; the second only the end-to-end tests.
+
+### What is tested
+
+- **Unit tests**, next to the code (`#[cfg(test)] mod tests` at the end of each module): paths,
+  formatting, config and profiles, exclusions, timestamps, hashing, error classification, retries,
+  deletion modes and the trash folder, summary counters and exit codes.
+- **Integration tests** in `tests/mirror.rs`, on real temporary folders with full analyze + sync runs:
+  new, edited and deleted files, timestamp-only updates, folders, letter-case renames, exclusions,
+  backups, the deletion limit, same / nested / missing folders, protection behind skipped links,
+  files that change after the analysis, cancellation, `--stop-on-error`, saved plans, read-only files
+  and reports. Shared helpers (temporary folders, file trees) are in `tests/common/mod.rs`.
+
+### Coverage
+
+Coverage shows which lines the tests execute. Generate the report and open it in the browser:
+
+```bash
+cargo llvm-cov --html --open
+```
+
+The report is saved in `target/llvm-cov/html/index.html`. It lists the coverage per file; click a
+file to see its lines, with the ones never executed by a test in red. For a quick summary in the
+terminal, run `cargo llvm-cov` without options.
+
+To see only the program logic, leaving out the console code:
+
+```bash
+cargo llvm-cov --html --open --ignore-filename-regex "(cli|main\.rs)"
+```
+
+How to read it:
+- The logic (`features/`, `shared/`, `app.rs`) is around **85%** covered. New code should keep it
+  there or higher.
+- `cli/` (console output, progress bars, the confirmation question) is not run by the tests; it is
+  checked by using the tool.
+- Some error paths stay red on purpose: unreadable folders, full disks, network failures and the real
+  Recycle Bin are hard to reproduce in automated tests.
+- Focus on red lines in important logic, such as deletions, safety checks and the protection of the
+  destination. Those deserve a test.
+
+### Adding tests
+
+- **For a small function**, add a test in the `mod tests` at the end of the same file.
+- **For a behavior of the whole tool**, add a scenario to `tests/mirror.rs` using `Fixture`: write files
+  with `f.src(...)` / `f.dst(...)`, run `f.mirror()`, then check the destination with `tree(...)`.
+- Every new feature or bug fix should come with a test that fails without the change.
+
 ## Building
 
 Requires Rust (https://rustup.rs).
@@ -155,9 +246,12 @@ Once all changes are done and tested:
    ```bash
    git pull
    ```
-2. **Check the code.** It must finish with no errors or warnings (and `cargo test`, once there are tests).
+2. **Run the tests and checks.** Both must pass (the release script runs them again, see step 5):
    ```bash
-   cargo clippy --release
+   cargo test
+   ```
+   ```bash
+   cargo clippy --all-targets -- -D warnings
    ```
 3. **Pick the new version** following `MAJOR.MINOR.PATCH`:
    - `PATCH` (0.1.0 → 0.1.1) for bug fixes only.
@@ -172,6 +266,8 @@ Once all changes are done and tested:
    ```bash
    powershell -ExecutionPolicy Bypass -File scripts\release.ps1
    ```
+   The script first runs clippy and every test. If anything fails it prints
+   `Release stopped: ...`, builds nothing and exits with an error: fix the problem and run it again.
    For macOS, run `sh scripts/release.sh` on a Mac with the same commit, copy its files into
    `dist/<version>/`, and run the Windows script again so `SHA256SUMS.txt` includes them.
 6. **Smoke-test the published binary.** It must print the new version; then try a `--dry-run`:
@@ -214,6 +310,11 @@ src/
     report/                 result file: JSON (re-executable), CSV, and the HTML report
   shared/                   reusable code: errors, paths, files, hashing, config, progress
   cli/                      command line only: args, commands, console output, progress bars
+tests/
+  mirror.rs                 end-to-end scenarios on temporary folders
+  common/mod.rs             test helpers (fixtures, file trees)
+scripts/
+  release.ps1, release.sh   run the checks, then build dist/<version>/
 ```
 
 Rules: features depend on `shared`, never on `cli`; data flows scan → compare → plan → sync →

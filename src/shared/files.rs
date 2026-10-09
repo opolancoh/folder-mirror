@@ -135,3 +135,51 @@ pub fn recycle_bin_unavailable_reason(path: &Path) -> Option<&'static str> {
 pub fn recycle_bin_unavailable_reason(_path: &Path) -> Option<&'static str> {
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::UNIX_EPOCH;
+
+    #[test]
+    fn times_match_within_the_tolerance_in_both_directions() {
+        let a = UNIX_EPOCH + Duration::from_secs(1000);
+        let b = a + Duration::from_millis(1500);
+        assert!(times_match(a, b, Duration::from_secs(2)));
+        assert!(times_match(b, a, Duration::from_secs(2)));
+        assert!(!times_match(a, b, Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn time_strings_round_trip_exactly() {
+        let time = UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_700);
+        assert_eq!(time_from_string(&time_to_string(time)), Some(time));
+        assert_eq!(time_from_string("not a date"), None);
+    }
+
+    #[test]
+    fn set_modified_changes_the_file_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        fs::write(&path, "a").unwrap();
+        let time = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        set_modified(&path, time).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), time);
+    }
+
+    #[test]
+    fn remove_dir_all_force_deletes_read_only_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("f");
+        fs::create_dir(&folder).unwrap();
+        let file = folder.join("ro.txt");
+        fs::write(&file, "x").unwrap();
+        let mut permissions = fs::metadata(&file).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&file, permissions).unwrap();
+
+        remove_dir_all_force(&folder).unwrap();
+
+        assert!(!folder.exists());
+    }
+}

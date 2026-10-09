@@ -43,3 +43,38 @@ pub fn sampled_hash(path: &Path, size: u64) -> io::Result<Digest> {
     }
     Ok(*hasher.finalize().as_bytes())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn small_files_get_the_same_sampled_and_full_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("small.txt");
+        fs::write(&path, "hello").unwrap();
+        assert_eq!(sampled_hash(&path, 5).unwrap(), full_hash(&path).unwrap());
+    }
+
+    #[test]
+    fn sampled_hash_sees_changes_in_the_sampled_blocks_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let size = 4 * 1024 * 1024;
+        let original = vec![7u8; size];
+        let hash = |name: &str, data: &[u8]| {
+            let path = dir.path().join(name);
+            fs::write(&path, data).unwrap();
+            sampled_hash(&path, data.len() as u64).unwrap()
+        };
+        let base = hash("base", &original);
+
+        let mut end_changed = original.clone();
+        end_changed[size - 1] = 0;
+        assert_ne!(hash("end", &end_changed), base);
+
+        let mut between_samples = original.clone();
+        between_samples[size / 4] = 0;
+        assert_eq!(hash("between", &between_samples), base, "a change between samples is not seen");
+    }
+}

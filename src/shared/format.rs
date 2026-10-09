@@ -28,3 +28,24 @@ pub fn format_count(count: u64) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_bytes_with_units() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(1023), "1023 B");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(17_300_000_000), "16.1 GB");
+    }
+
+    #[test]
+    fn formats_counts_with_thousands_separators() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(12_372), "12,372");
+        assert_eq!(format_count(1_234_567), "1,234,567");
+    }
+}

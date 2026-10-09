@@ -75,3 +75,42 @@ fn build(builder: &mut GlobBuilder, pattern: &str) -> Result<Glob> {
 fn invalid(pattern: &str, err: globset::Error) -> MirrorError {
     MirrorError::Config(format!("invalid exclude pattern '{pattern}': {err}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn excluded(excludes: &Excludes, path: &str) -> bool {
+        excludes.is_excluded(&RelPath::new(path))
+    }
+
+    #[test]
+    fn default_os_files_are_excluded_at_any_depth_and_any_case() {
+        let excludes = Excludes::new(&[], true).unwrap();
+        assert!(excluded(&excludes, "Thumbs.db"));
+        assert!(excluded(&excludes, "photos/thumbs.DB"));
+        assert!(excluded(&excludes, "a/._resource"));
+        assert!(excluded(&excludes, "$RECYCLE.BIN"));
+        assert!(!excluded(&excludes, "notes.txt"));
+    }
+
+    #[test]
+    fn defaults_can_be_disabled() {
+        let excludes = Excludes::new(&[], false).unwrap();
+        assert!(!excluded(&excludes, "Thumbs.db"));
+    }
+
+    #[test]
+    fn name_patterns_match_anywhere_and_path_patterns_only_there() {
+        let excludes = Excludes::new(&["*.tmp".into(), "cache/old".into()], false).unwrap();
+        assert!(excluded(&excludes, "x.tmp"));
+        assert!(excluded(&excludes, "deep/folder/x.tmp"));
+        assert!(excluded(&excludes, "cache/old"));
+        assert!(!excluded(&excludes, "other/cache/old"));
+    }
+
+    #[test]
+    fn invalid_patterns_are_reported() {
+        assert!(Excludes::new(&["[".into()], false).is_err());
+    }
+}

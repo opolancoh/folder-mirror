@@ -208,3 +208,45 @@ fn classify_os_code(code: i32) -> Option<ProblemReason> {
 fn classify_os_code(_code: i32) -> Option<ProblemReason> {
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_common_io_errors() {
+        let not_found = io::Error::from(io::ErrorKind::NotFound);
+        let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+        assert_eq!(classify_io_error(&not_found), ProblemReason::NotFound);
+        assert_eq!(classify_io_error(&denied), ProblemReason::PermissionDenied);
+        assert_eq!(classify_io_error(&io::Error::other("x")), ProblemReason::IoError);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn classifies_windows_lock_and_disk_errors() {
+        assert_eq!(classify_io_error(&io::Error::from_raw_os_error(32)), ProblemReason::FileLocked);
+        assert_eq!(classify_io_error(&io::Error::from_raw_os_error(112)), ProblemReason::DiskFull);
+    }
+
+    #[test]
+    fn only_temporary_problems_are_retried() {
+        assert!(ProblemReason::FileLocked.is_retryable());
+        assert!(ProblemReason::ChangedDuringCopy.is_retryable());
+        assert!(!ProblemReason::PermissionDenied.is_retryable());
+        assert!(!ProblemReason::NotFound.is_retryable());
+    }
+
+    #[test]
+    fn problem_path_prefers_the_source() {
+        let problem = Problem::new(ProblemReason::IoError, "x").with_destination("dst").with_source("src");
+        assert_eq!(problem.path(), "src");
+        assert_eq!(Problem::new(ProblemReason::IoError, "x").with_destination("dst").path(), "dst");
+    }
+
+    #[test]
+    fn reasons_serialize_in_snake_case() {
+        assert_eq!(serde_json::to_string(&ProblemReason::FileLocked).unwrap(), "\"file_locked\"");
+        assert_eq!(ProblemReason::SourceChangedSincePlan.as_str(), "source_changed_since_plan");
+    }
+}

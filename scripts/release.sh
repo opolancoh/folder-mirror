@@ -12,8 +12,19 @@ cd "$root"
 
 version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)"
 out="dist/$version"
-mkdir -p "$out"
 echo "Release $version -> $root/$out"
+
+# Quality gate: nothing is built unless the code is clean and every test passes.
+echo
+echo "== Checks (clippy + tests)"
+if ! cargo clippy --all-targets -- -D warnings; then
+  echo; echo "Release stopped: clippy found problems. Nothing was built." >&2; exit 1
+fi
+if ! cargo test; then
+  echo; echo "Release stopped: some tests failed. Nothing was built." >&2; exit 1
+fi
+echo "All checks passed."
+mkdir -p "$out"
 
 build() { # build <rust target> <output name>
   echo

@@ -278,3 +278,79 @@ impl ConfigFile {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_modes_and_aliases() {
+        assert_eq!("smart".parse::<CompareMode>(), Ok(CompareMode::Smart));
+        assert_eq!("FULL".parse::<CompareMode>(), Ok(CompareMode::FullHash));
+        assert_eq!("quick-hash".parse::<CompareMode>(), Ok(CompareMode::QuickHash));
+        assert!("fast".parse::<CompareMode>().is_err());
+        assert_eq!("bin".parse::<DeleteMode>(), Ok(DeleteMode::RecycleBin));
+        assert_eq!("trash".parse::<DeleteMode>(), Ok(DeleteMode::TrashFolder));
+        assert!("shred".parse::<DeleteMode>().is_err());
+    }
+
+    #[test]
+    fn defaults_match_the_documentation() {
+        let settings = Settings::new("s", "d");
+        assert_eq!(settings.mode, CompareMode::Smart);
+        assert_eq!(settings.delete_mode, DeleteMode::RecycleBin);
+        assert_eq!(settings.mtime_tolerance, Duration::from_secs(2));
+        assert_eq!(settings.max_delete_percent, 20.0);
+        assert_eq!((settings.retries, settings.trash_keep, settings.max_errors_shown), (3, 4, 7));
+        assert!(settings.default_excludes && settings.backup_overwritten);
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_values() {
+        let invalid = |change: fn(&mut Settings)| {
+            let mut settings = Settings::new("s", "d");
+            change(&mut settings);
+            settings.validate().is_err()
+        };
+        assert!(invalid(|s| s.max_delete_percent = 101.0));
+        assert!(invalid(|s| s.retries = 0));
+        assert!(invalid(|s| s.trash_keep = 0));
+        assert!(invalid(|s| s.threads = Some(0)));
+    }
+
+    #[test]
+    fn negative_seconds_are_rejected() {
+        assert!(to_duration(-1.0, "x").is_err());
+        assert_eq!(to_duration(0.5, "x").unwrap(), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn profiles_are_read_and_applied() {
+        let text = "[profiles.weekly]\n\
+                    source = \"a\"\n\
+                    destination = \"b\"\n\
+                    mode = \"full-hash\"\n\
+                    delete_mode = \"trash-folder\"\n\
+                    exclude = [\"*.tmp\"]\n\
+                    max_delete = 50\n\
+                    output_dir = \"reports\"\n";
+        let config: ConfigFile = toml::from_str(text).unwrap();
+        let mut settings = Settings::new("a", "b");
+        settings.apply_profile(config.profile("weekly").unwrap()).unwrap();
+
+        assert_eq!(settings.mode, CompareMode::FullHash);
+        assert_eq!(settings.delete_mode, DeleteMode::TrashFolder);
+        assert_eq!(settings.excludes, ["*.tmp"]);
+        assert_eq!(settings.max_delete_percent, 50.0);
+        assert_eq!(settings.report_dir, Some(PathBuf::from("reports")));
+    }
+
+    #[test]
+    fn unknown_profiles_and_fields_are_errors() {
+        let config: ConfigFile = toml::from_str("[profiles.a]\nsource = \"x\"").unwrap();
+        let error = config.profile("b").unwrap_err().to_string();
+        assert!(error.contains("available: a"), "{error}");
+        assert!(toml::from_str::<ConfigFile>("[profiles.a]\nsorce = \"x\"").is_err());
+    }
+}

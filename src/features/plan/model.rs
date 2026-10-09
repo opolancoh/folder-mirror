@@ -352,3 +352,103 @@ pub fn exit_code_meaning(code: i32) -> &'static str {
         _ => "aborted",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan(actions: Vec<SyncAction>) -> SyncPlan {
+        let mut plan = SyncPlan {
+            tool_version: "test".into(),
+            created_at: String::new(),
+            source: "s".into(),
+            destination: "d".into(),
+            mode: CompareMode::Smart,
+            delete_mode: DeleteMode::TrashFolder,
+            case_insensitive: false,
+            analysis: AnalysisInfo::default(),
+            summary: Summary::default(),
+            execution: None,
+            not_executed: None,
+            blockers: Vec::new(),
+            warnings: Vec::new(),
+            problems: Vec::new(),
+            skipped: Vec::new(),
+            actions,
+            source_root: PathBuf::new(),
+            destination_root: PathBuf::new(),
+        };
+        plan.refresh_summary();
+        plan
+    }
+
+    fn copy(size: u64, status: ActionStatus) -> SyncAction {
+        let mut action = SyncAction::new(ActionKind::Copy, ActionReason::Added, RelPath::new("a"), "d/a".into());
+        action.size = Some(size);
+        action.status = status;
+        action
+    }
+
+    fn execution() -> Execution {
+        Execution {
+            started_at: String::new(),
+            finished_at: String::new(),
+            duration_secs: 0.0,
+            delete_mode_used: DeleteMode::TrashFolder,
+            delete_mode_fallback: None,
+            trash_folder: None,
+            cancelled: false,
+            exit_code: 0,
+            confirmation: String::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn summary_counts_actions_by_kind_and_status() {
+        let plan = plan(vec![copy(10, ActionStatus::Done), copy(5, ActionStatus::Failed), copy(1, ActionStatus::Pending)]);
+        let added = &plan.summary.added;
+        assert_eq!((added.planned, added.done, added.failed), (3, 1, 1));
+        assert_eq!(plan.summary.bytes_added, 16);
+    }
+
+    #[test]
+    fn exit_codes_follow_the_documented_meaning() {
+        assert_eq!(plan(vec![]).exit_code(), EXIT_OK);
+        assert_eq!(plan(vec![copy(1, ActionStatus::Pending)]).exit_code(), EXIT_DIFFERENCES);
+
+        let mut blocked = plan(vec![copy(1, ActionStatus::Pending)]);
+        blocked.blockers.push("too many deletions".into());
+        assert_eq!(blocked.exit_code(), EXIT_ABORTED);
+
+        let mut with_problem = plan(vec![]);
+        with_problem.problems.push(Problem::new(ProblemReason::FileLocked, "x"));
+        with_problem.refresh_summary();
+        assert_eq!(with_problem.exit_code(), EXIT_PROBLEMS);
+
+        let mut done = plan(vec![copy(1, ActionStatus::Done)]);
+        done.execution = Some(execution());
+        assert_eq!(done.exit_code(), EXIT_OK);
+        done.execution.as_mut().unwrap().cancelled = true;
+        assert_eq!(done.exit_code(), EXIT_PROBLEMS);
+    }
+
+    #[test]
+    fn prepare_for_execution_keeps_done_actions_and_resets_the_rest() {
+        let mut failed = copy(1, ActionStatus::Failed);
+        failed.error = Some("locked".into());
+        let mut plan = plan(vec![copy(1, ActionStatus::Done), failed]);
+        plan.execution = Some(execution());
+        plan.not_executed = Some("declined".into());
+        let mut sync_problem = Problem::new(ProblemReason::FileLocked, "x");
+        sync_problem.stage = Stage::Sync;
+        plan.problems.push(sync_problem);
+
+        plan.prepare_for_execution();
+
+        assert_eq!(plan.actions[0].status, ActionStatus::Done);
+        assert_eq!(plan.actions[1].status, ActionStatus::Pending);
+        assert!(plan.actions[1].error.is_none());
+        assert!(plan.problems.is_empty() && plan.execution.is_none() && plan.not_executed.is_none());
+    }
+}

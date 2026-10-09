@@ -132,3 +132,59 @@ pub fn prune_trash(destination_root: &Path, keep: usize) -> io::Result<usize> {
     }
     Ok(excess)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn falls_back_to_the_trash_folder_on_network_paths() {
+        let deleter = Deleter::new(DeleteMode::RecycleBin, Path::new(r"\\server\share\mirror"), "run");
+        assert_eq!(deleter.effective_mode(), DeleteMode::TrashFolder);
+        assert!(deleter.fallback_note().unwrap().contains("network path"));
+    }
+
+    #[test]
+    fn other_modes_are_used_as_requested() {
+        let root = Path::new("anything");
+        assert_eq!(Deleter::new(DeleteMode::Permanent, root, "run").effective_mode(), DeleteMode::Permanent);
+        assert_eq!(Deleter::new(DeleteMode::TrashFolder, root, "run").effective_mode(), DeleteMode::TrashFolder);
+        assert!(Deleter::new(DeleteMode::TrashFolder, root, "run").fallback_note().is_none());
+    }
+
+    #[test]
+    fn the_same_name_twice_in_one_run_gets_a_numbered_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let deleter = Deleter::new(DeleteMode::TrashFolder, dir.path(), "run");
+        let file = dir.path().join("a.txt");
+        let rel = RelPath::new("a.txt");
+        for content in ["first", "second"] {
+            fs::write(&file, content).unwrap();
+            deleter.dispose(&file, &rel).unwrap();
+        }
+
+        let trash = dir.path().join(TRASH_DIR_NAME).join("run");
+        assert_eq!(fs::read_to_string(trash.join("a.txt")).unwrap(), "first");
+        assert_eq!(fs::read_to_string(trash.join("a.txt.1")).unwrap(), "second");
+        assert_eq!(deleter.trash_dir_used(), Some(trash.as_path()));
+    }
+
+    #[test]
+    fn whole_folders_can_be_disposed() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("old");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("x.txt"), "x").unwrap();
+
+        Deleter::new(DeleteMode::Permanent, dir.path(), "run").dispose(&folder, &RelPath::new("old")).unwrap();
+
+        assert!(!folder.exists());
+    }
+
+    #[test]
+    fn prune_without_a_trash_folder_does_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(prune_trash(dir.path(), 1).unwrap(), 0);
+    }
+}

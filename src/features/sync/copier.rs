@@ -228,3 +228,69 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     name.push(suffix);
     PathBuf::from(name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn retry() -> Retry {
+        Retry { attempts: 3, delay: Duration::from_millis(1) }
+    }
+
+    fn fail(reason: ProblemReason) -> Result<(), Failure> {
+        Err(Failure::new(reason, "test"))
+    }
+
+    #[test]
+    fn retries_locked_files_until_they_succeed() {
+        let calls = Cell::new(0);
+        let result = retry().run(&AtomicBool::new(false), || {
+            calls.set(calls.get() + 1);
+            if calls.get() < 3 { fail(ProblemReason::FileLocked) } else { Ok(()) }
+        });
+        assert_eq!(result.unwrap(), 3);
+    }
+
+    #[test]
+    fn gives_up_after_the_last_attempt() {
+        let error = retry().run(&AtomicBool::new(false), || fail(ProblemReason::FileLocked)).unwrap_err();
+        assert_eq!((error.reason, error.attempts), (ProblemReason::FileLocked, 3));
+    }
+
+    #[test]
+    fn does_not_retry_permanent_problems_or_when_cancelled() {
+        let denied = retry().run(&AtomicBool::new(false), || fail(ProblemReason::PermissionDenied));
+        assert_eq!(denied.unwrap_err().attempts, 1);
+        let cancelled = retry().run(&AtomicBool::new(true), || fail(ProblemReason::FileLocked));
+        assert_eq!(cancelled.unwrap_err().attempts, 1);
+    }
+
+    #[test]
+    fn copy_reports_progress_and_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.bin");
+        let destination = dir.path().join("out").join("copy.bin");
+        let data = vec![42u8; 3 * 1024 * 1024];
+        fs::write(&source, &data).unwrap();
+        let last = Cell::new(0u64);
+
+        copy_file(&source, &destination, &RelPath::new("copy.bin"), None, true, &|copied| last.set(copied)).unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), data);
+        assert_eq!(last.get(), data.len() as u64);
+        assert!(!temp_path(&destination).exists());
+    }
+
+    #[test]
+    fn rename_case_changes_only_the_letter_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("report.txt");
+        fs::write(&from, "x").unwrap();
+
+        rename_case(&from, &dir.path().join("Report.txt")).unwrap();
+
+        let names: Vec<_> = fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["Report.txt"]);
+    }
+}

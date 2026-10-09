@@ -187,3 +187,84 @@ pub fn windows_name_issue(name: &str) -> Option<&'static str> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rel_path_is_normalized() {
+        let path = RelPath::new("\\docs\\a.txt/");
+        assert_eq!(path.as_str(), "docs/a.txt");
+        assert_eq!(path.name(), "a.txt");
+        assert_eq!(path.depth(), 2);
+        assert!(RelPath::new("").is_root());
+        assert_eq!(RelPath::new("").depth(), 0);
+    }
+
+    #[test]
+    fn rel_path_from_relative_skips_dots_and_rejects_parents() {
+        assert_eq!(RelPath::from_relative(Path::new("a/./b")).unwrap().as_str(), "a/b");
+        assert!(RelPath::from_relative(Path::new("../x")).is_none());
+    }
+
+    #[test]
+    fn rel_path_from_root_strips_the_root() {
+        let root = Path::new("root");
+        assert_eq!(RelPath::from_root(root, &root.join("a").join("b")).unwrap().as_str(), "a/b");
+        assert!(RelPath::from_root(root, Path::new("other/a")).is_none());
+    }
+
+    #[test]
+    fn key_folds_case_only_when_insensitive() {
+        let path = RelPath::new("Docs/Report.TXT");
+        assert_eq!(path.key(true), "docs/report.txt");
+        assert_eq!(path.key(false), "Docs/Report.TXT");
+    }
+
+    #[test]
+    fn to_native_joins_each_segment() {
+        let native = RelPath::new("a/b.txt").to_native(Path::new("root"));
+        assert_eq!(native, Path::new("root").join("a").join("b.txt"));
+    }
+
+    #[test]
+    fn ancestor_keys_lists_every_parent() {
+        assert_eq!(ancestor_keys("a/b/c").collect::<Vec<_>>(), ["a", "a/b"]);
+        assert_eq!(ancestor_keys("a").count(), 0);
+    }
+
+    #[test]
+    fn display_path_removes_the_long_path_prefix() {
+        assert_eq!(display_path(Path::new(r"\\?\C:\data")), r"C:\data");
+        assert_eq!(display_path(Path::new(r"\\?\UNC\server\share")), r"\\server\share");
+        assert_eq!(display_path(Path::new("/home/user")), "/home/user");
+    }
+
+    #[test]
+    fn windows_name_issue_detects_names_windows_cannot_store() {
+        assert!(windows_name_issue("a:b.txt").is_some());
+        assert!(windows_name_issue("file.").is_some());
+        assert!(windows_name_issue("file ").is_some());
+        assert!(windows_name_issue("CON").is_some());
+        assert!(windows_name_issue("nul.txt").is_some());
+        assert!(windows_name_issue("normal.txt").is_none());
+        assert!(windows_name_issue("CONSOLE.txt").is_none());
+    }
+
+    #[test]
+    fn overlaps_compares_whole_components() {
+        assert!(overlaps(Path::new("/x"), Path::new("/x")));
+        assert!(overlaps(Path::new("/x"), Path::new("/x/y")));
+        assert!(overlaps(Path::new("/x/y"), Path::new("/x")));
+        assert!(!overlaps(Path::new("/x"), Path::new("/xy")));
+    }
+
+    #[test]
+    fn resolve_root_works_for_folders_that_do_not_exist_yet() {
+        let missing = std::env::temp_dir().join("folder-mirror-test-missing").join("child");
+        let resolved = resolve_root(&missing).unwrap();
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with(Path::new("folder-mirror-test-missing").join("child")));
+    }
+}

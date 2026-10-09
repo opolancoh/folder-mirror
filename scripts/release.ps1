@@ -12,13 +12,21 @@ Set-Location $root
 
 $version = (Select-String -Path 'Cargo.toml' -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $out = Join-Path $root "dist\$version"
-New-Item -ItemType Directory -Force $out | Out-Null
 Write-Host "Release $version -> $out"
 
 function Invoke-Cargo([string[]]$CargoArgs) {
     & cargo @CargoArgs
     if ($LASTEXITCODE -ne 0) { throw "cargo $($CargoArgs -join ' ') failed" }
 }
+
+# Quality gate: nothing is built unless the code is clean and every test passes.
+Write-Host "`n== Checks (clippy + tests)"
+& cargo clippy --all-targets -- -D warnings
+if ($LASTEXITCODE -ne 0) { Write-Host "`nRelease stopped: clippy found problems. Nothing was built." -ForegroundColor Red; exit 1 }
+& cargo test
+if ($LASTEXITCODE -ne 0) { Write-Host "`nRelease stopped: some tests failed. Nothing was built." -ForegroundColor Red; exit 1 }
+Write-Host 'All checks passed.' -ForegroundColor Green
+New-Item -ItemType Directory -Force $out | Out-Null
 
 # Windows x64 (C runtime linked in, see .cargo/config.toml)
 Write-Host "`n== Windows x64"
