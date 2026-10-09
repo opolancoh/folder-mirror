@@ -178,6 +178,8 @@ pub struct Summary {
     pub protected: u64,
     pub bytes_added: u64,
     pub bytes_modified: u64,
+    #[serde(default)]
+    pub bytes_removed: u64,
     pub skipped_entries: u64,
     pub cancelled: u64,
     pub problems: ProblemSummary,
@@ -196,9 +198,20 @@ pub struct Execution {
     pub trash_folder: Option<String>,
     pub cancelled: bool,
     pub exit_code: i32,
+    /// How the sync was started: "confirmed by the user" or "automatic (--confirm false)".
+    #[serde(default)]
+    pub confirmation: String,
     /// Warnings raised while syncing (the analysis ones stay in `SyncPlan::warnings`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// When the analysis ran.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AnalysisInfo {
+    pub started_at: String,
+    pub finished_at: String,
+    pub duration_secs: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,9 +224,15 @@ pub struct SyncPlan {
     pub delete_mode: DeleteMode,
     #[serde(default)]
     pub case_insensitive: bool,
+    #[serde(default)]
+    pub analysis: AnalysisInfo,
     pub summary: Summary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<Execution>,
+    /// Why the changes were not applied (dry run, declined, blocked...). `None` with no
+    /// `execution` means the run has not finished yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_executed: Option<String>,
     /// Safety checks that failed; the sync refuses to run while this is not empty.
     #[serde(default)]
     pub blockers: Vec<String>,
@@ -253,6 +272,7 @@ impl SyncPlan {
         }
         summary.bytes_added = 0;
         summary.bytes_modified = 0;
+        summary.bytes_removed = 0;
         summary.cancelled = 0;
 
         for action in &self.actions {
@@ -275,6 +295,7 @@ impl SyncPlan {
             match action.action {
                 ActionKind::Copy => summary.bytes_added += action.size.unwrap_or(0),
                 ActionKind::Overwrite => summary.bytes_modified += action.size.unwrap_or(0),
+                ActionKind::Delete => summary.bytes_removed += action.size.unwrap_or(0),
                 _ => {}
             }
             if action.problem == Some(ProblemReason::Cancelled) {
@@ -302,6 +323,7 @@ impl SyncPlan {
         }
         self.problems.retain(|p| p.stage == Stage::Analyze);
         self.execution = None;
+        self.not_executed = None;
         self.refresh_summary();
     }
 

@@ -1,56 +1,36 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser};
 
 use folder_mirror::features::report::ReportFormat;
 use folder_mirror::shared::config::{to_duration, CompareMode, DeleteMode, Settings};
 use folder_mirror::shared::error::Result;
 
+/// One command: analyze, show the summary, ask, then make the destination identical.
 #[derive(Debug, Parser)]
 #[command(
     name = "mirror",
     version,
     about = "Keep a mirror folder identical to its source folder",
-    after_help = "Exit codes: 0 in sync / success, 1 differences found (analyze), 2 completed with problems, 3 aborted"
+    after_help = "Run without folders to see how the tool works.\n\
+                  Exit codes: 0 in sync / success, 1 differences found (not applied), 2 completed with problems, 3 aborted"
 )]
 pub struct Cli {
-    /// Without a command, shows how the tool works and the default settings.
-    #[command(subcommand)]
-    pub command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum Command {
-    /// Compare source and destination and write the result file. Changes nothing.
-    Analyze(AnalyzeArgs),
-    /// Analyze, show the summary, ask for confirmation, then make the destination identical.
-    Sync(SyncArgs),
-}
-
-#[derive(Debug, Args)]
-pub struct AnalyzeArgs {
     #[command(flatten)]
     pub target: TargetArgs,
     #[command(flatten)]
     pub options: OptionArgs,
     #[command(flatten)]
     pub output: OutputArgs,
-}
-
-#[derive(Debug, Args)]
-pub struct SyncArgs {
-    #[command(flatten)]
-    pub target: TargetArgs,
-    #[command(flatten)]
-    pub options: OptionArgs,
-    #[command(flatten)]
-    pub output: OutputArgs,
-    /// Execute a plan written by `analyze` (JSON) instead of analyzing again
+    /// Ask before changing the destination. Use --confirm false for scheduled runs
+    #[arg(long, value_name = "true|false", default_value_t = true, action = ArgAction::Set)]
+    pub confirm: bool,
+    /// Only show the summary and write the report; never change anything
+    #[arg(long, conflicts_with = "plan")]
+    pub dry_run: bool,
+    /// Apply a result file (JSON) from an earlier run instead of analyzing again
     #[arg(long, value_name = "FILE", conflicts_with_all = ["source", "destination"])]
     pub plan: Option<PathBuf>,
-    /// Do not ask for confirmation (for scheduled runs)
-    #[arg(short, long)]
-    pub yes: bool,
 }
 
 #[derive(Debug, Args)]
@@ -164,10 +144,10 @@ impl OptionArgs {
 
 #[derive(Debug, Args)]
 pub struct OutputArgs {
-    /// Result file path [default: mirror-result-<date>.<format> in the current folder]
-    #[arg(short, long, value_name = "FILE")]
-    pub output: Option<PathBuf>,
-    /// Result file format: json, csv [default: from the file extension, else json]
+    /// Folder for the result file and HTML report, named folder-mirror-<date>T<time><zone> [default: current folder]
+    #[arg(short = 'o', long, value_name = "DIR")]
+    pub output_dir: Option<PathBuf>,
+    /// Result file format: json, csv [default: json]
     #[arg(long, value_name = "FORMAT")]
     pub format: Option<ReportFormat>,
 }

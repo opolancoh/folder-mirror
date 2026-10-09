@@ -3,29 +3,32 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
+use chrono::Local;
 
 use folder_mirror::app;
 use folder_mirror::features::plan::{SyncPlan, EXIT_ABORTED, EXIT_DIFFERENCES};
-use folder_mirror::features::report::{self, ReportFormat};
+use folder_mirror::features::report::{self, ReportFormat, ReportPaths};
 use folder_mirror::shared::config::{ConfigFile, Profile, Settings};
 
-use super::args::{AnalyzeArgs, Cli, Command, OptionArgs, OutputArgs, SyncArgs, TargetArgs};
-use super::output;
+use super::args::{Cli, OptionArgs, TargetArgs};
+use super::output::{self, RunMode};
 use super::progress::ConsoleProgress;
 
 const DEFAULT_CONFIG: &str = "mirror.toml";
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
-/// Runs the command and returns the process exit code.
-pub fn run(cli: Cli) -> i32 {
-    let result = match cli.command {
-        None => {
-            output::print_overview();
-            Ok(0)
-        }
-        Some(Command::Analyze(args)) => analyze(args),
-        Some(Command::Sync(args)) => sync(args),
+/// Runs the tool and returns the process exit code.
+pub fn run(args: Cli) -> i32 {
+    let nothing_given = args.target.source.is_none()
+        && args.target.destination.is_none()
+        && args.target.profile.is_none()
+        && args.plan.is_none();
+    let result = if nothing_given {
+        output::print_overview();
+        Ok(0)
+    } else {
+        mirror(args)
     };
     result.unwrap_or_else(|err| {
         output::print_fatal(&err);
@@ -33,59 +36,79 @@ pub fn run(cli: Cli) -> i32 {
     })
 }
 
-fn analyze(args: AnalyzeArgs) -> Result<i32> {
-    let settings = build_settings(&args.target, &args.options, None)?;
-    app::configure_threads(&settings)?;
-    output::print_settings(&settings, "analyze");
-    let plan = run_analysis(&settings)?;
-    output::print_analysis(&plan, &settings);
-    finish(&plan, &args.output, plan.exit_code())
-}
-
-fn sync(args: SyncArgs) -> Result<i32> {
+/// One run: analyze (or load a plan), show the summary, ask, apply, report.
+fn mirror(args: Cli) -> Result<i32> {
+    // The report name uses the time the run started, with its time zone.
+    let started = Local::now();
+    let mode = if args.dry_run {
+        RunMode::DryRun
+    } else if args.confirm {
+        RunMode::Ask
+    } else {
+        RunMode::Automatic
+    };
     let (settings, mut plan) = match &args.plan {
         Some(path) => {
             let plan = app::load_plan(path)?;
             let settings = build_settings(&args.target, &args.options, Some(&plan))?;
             app::configure_threads(&settings)?;
-            output::print_settings(&settings, "sync");
+            output::print_settings(&settings, mode);
             (settings, plan)
         }
         None => {
             let settings = build_settings(&args.target, &args.options, None)?;
             app::configure_threads(&settings)?;
-            output::print_settings(&settings, "sync");
+            output::print_settings(&settings, mode);
             let plan = run_analysis(&settings)?;
             (settings, plan)
         }
     };
     output::print_analysis(&plan, &settings);
 
-    if !plan.blockers.is_empty() {
-        return finish(&plan, &args.output, EXIT_ABORTED);
-    }
-    if !plan.has_pending_actions() {
-        output::print_in_sync();
-        return finish(&plan, &args.output, plan.exit_code());
-    }
-    if !args.yes {
-        if !io::stdin().is_terminal() {
-            output::print_not_interactive();
-            return finish(&plan, &args.output, EXIT_ABORTED);
-        }
-        if !confirm()? {
-            output::print_declined();
-            return finish(&plan, &args.output, EXIT_DIFFERENCES);
-        }
+    // Step 1: save the analysis now, so it is kept even if the sync is interrupted.
+    let format = args.output.format.unwrap_or_default();
+    let dir = args
+        .output
+        .output_dir
+        .clone()
+        .or_else(|| settings.report_dir.clone())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let paths = report::report_paths(&dir, format, started)
+        .with_context(|| format!("cannot create report files in {}", dir.display()))?;
+    save(&plan, &paths, format, plan.exit_code())?;
+
+    // Step 2: decide, apply, and update the same report.
+    let not_executed = if !plan.blockers.is_empty() {
+        Some(("blocked by safety checks", EXIT_ABORTED))
+    } else if !plan.has_pending_actions() {
+        Some(("nothing to do, the destination is already identical", plan.exit_code()))
+    } else if mode == RunMode::DryRun {
+        Some(("dry run (--dry-run)", plan.exit_code()))
+    } else if mode == RunMode::Ask && !io::stdin().is_terminal() {
+        output::print_not_interactive();
+        Some(("no terminal to ask for confirmation", EXIT_ABORTED))
+    } else if mode == RunMode::Ask && !confirm()? {
+        output::print_declined();
+        Some(("declined by the user", EXIT_DIFFERENCES))
+    } else {
+        None
+    };
+    if let Some((reason, code)) = not_executed {
+        plan.not_executed = Some(reason.to_string());
+        return finish(&plan, &paths, format, code);
     }
 
+    let confirmation = match mode {
+        RunMode::Ask => "confirmed by the user",
+        _ => "automatic (--confirm false)",
+    };
     install_ctrlc_handler()?;
     {
         let progress = ConsoleProgress::new();
-        app::sync(&mut plan, &settings, &progress, &CANCEL)?;
+        app::sync(&mut plan, &settings, &progress, &CANCEL, confirmation)?;
     }
     output::print_sync_result(&plan, &settings);
-    finish(&plan, &args.output, plan.exit_code())
+    finish(&plan, &paths, format, plan.exit_code())
 }
 
 fn run_analysis(settings: &Settings) -> Result<SyncPlan> {
@@ -93,22 +116,19 @@ fn run_analysis(settings: &Settings) -> Result<SyncPlan> {
     Ok(app::analyze(settings, &progress)?)
 }
 
-/// Writes the result file (JSON or CSV) plus an HTML report with the same name, and prints where.
-fn finish(plan: &SyncPlan, args: &OutputArgs, code: i32) -> Result<i32> {
-    let format = args
-        .format
-        .or_else(|| args.output.as_deref().and_then(ReportFormat::from_path))
-        .unwrap_or_default();
-    let mut path = args.output.clone().unwrap_or_else(|| report::default_report_path(format));
-    let html = path.with_extension("html");
-    if path == html {
-        path = path.with_extension(format.extension());
-    }
-    report::write_report(plan, &path, format)
-        .with_context(|| format!("cannot write the result file {}", path.display()))?;
-    report::write_html(plan, &html, code)
-        .with_context(|| format!("cannot write the HTML report {}", html.display()))?;
-    output::print_footer(&path, &html, code);
+/// Writes the result file (JSON or CSV) and the HTML report.
+fn save(plan: &SyncPlan, paths: &ReportPaths, format: ReportFormat, code: i32) -> Result<()> {
+    report::write_report(plan, &paths.result, format)
+        .with_context(|| format!("cannot write the result file {}", paths.result.display()))?;
+    report::write_html(plan, &paths.html, code)
+        .with_context(|| format!("cannot write the HTML report {}", paths.html.display()))?;
+    Ok(())
+}
+
+/// Final save of the report, then prints where it is.
+fn finish(plan: &SyncPlan, paths: &ReportPaths, format: ReportFormat, code: i32) -> Result<i32> {
+    save(plan, paths, format, code)?;
+    output::print_footer(&paths.result, &paths.html, code);
     Ok(code)
 }
 
@@ -158,7 +178,7 @@ fn load_profile(target: &TargetArgs) -> Result<Option<Profile>> {
     let mut profile = config.profile(name)?.clone();
     // Relative folders in the profile are relative to the config file, not the current folder.
     let base = path.parent().unwrap_or(Path::new(""));
-    for folder in [&mut profile.source, &mut profile.destination].into_iter().flatten() {
+    for folder in [&mut profile.source, &mut profile.destination, &mut profile.output_dir].into_iter().flatten() {
         if folder.is_relative() {
             *folder = base.join(&*folder);
         }

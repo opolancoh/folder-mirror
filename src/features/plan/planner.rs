@@ -2,7 +2,7 @@
 
 use chrono::{Local, SecondsFormat};
 
-use super::model::{ActionKind, ActionReason, Summary, SyncAction, SyncPlan};
+use super::model::{ActionKind, ActionReason, AnalysisInfo, Summary, SyncAction, SyncPlan};
 use crate::features::compare::{ChangeReason, Diff};
 use crate::features::scan::{FileEntry, Snapshot};
 use crate::shared::config::{DeleteMode, Settings};
@@ -142,7 +142,9 @@ pub fn build_plan(
             protected: diff.protected,
             ..Summary::default()
         },
+        analysis: AnalysisInfo::default(),
         execution: None,
+        not_executed: None,
         blockers: Vec::new(),
         warnings,
         problems,

@@ -1,6 +1,7 @@
 //! Runs every action of a plan, records the outcome of each one, and never stops on a failed
 //! file (unless `stop_on_error` is set or the user cancels).
 
+use std::cell::Cell;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -53,7 +54,13 @@ pub fn execute(
         progress,
     };
 
-    progress.step_started(Step::Sync, Some(plan.actions.len() as u64));
+    let bytes_to_copy = plan
+        .actions
+        .iter()
+        .filter(|a| a.status == ActionStatus::Pending && matches!(a.action, ActionKind::Copy | ActionKind::Overwrite))
+        .map(|a| a.size.unwrap_or(0))
+        .sum();
+    progress.sync_started(plan.actions.len() as u64, bytes_to_copy);
     match fs::create_dir_all(&destination_root) {
         Ok(()) => {
             // Structural changes run in order; file transfers run in parallel.
@@ -104,6 +111,7 @@ pub fn execute(
         trash_folder: deleter.trash_dir_used().map(display_path),
         cancelled: plan.summary.cancelled > 0,
         exit_code: EXIT_OK,
+        confirmation: String::new(),
         warnings,
     }
 }
@@ -173,8 +181,16 @@ fn perform(action: &SyncAction, ctx: &Context) -> Result<u32, OpError> {
         ActionKind::Copy | ActionKind::Overwrite => {
             ensure_source_unchanged(&source, action)?;
             let backup = ctx.settings.backup_overwritten.then_some(ctx.deleter);
+            // Report only new bytes, so a retried copy is not counted twice.
+            let reported = Cell::new(0u64);
+            let on_progress = |copied: u64| {
+                if copied > reported.get() {
+                    ctx.progress.bytes_copied(copied - reported.get());
+                    reported.set(copied);
+                }
+            };
             ctx.retry.run(cancel, || {
-                copier::copy_file(&source, &destination, &action.path, backup, ctx.settings.verify)
+                copier::copy_file(&source, &destination, &action.path, backup, ctx.settings.verify, &on_progress)
             })
         }
         ActionKind::UpdateTime => {

@@ -6,28 +6,31 @@ removed files deleted.
 
 ## Usage
 
+One command does everything: it scans both folders, shows what will change in the destination,
+asks `Proceed with sync?`, and applies the changes.
+
 ```bash
-# 1. See what would change (changes nothing, writes a result file)
-mirror analyze -s \\server\share\work -d E:\mirror\work
+# Analyze, ask, apply
+mirror -s \\server\share\work -d E:\mirror\work
 
-# 2. Sync (shows the summary and asks for confirmation)
-mirror sync -s \\server\share\work -d E:\mirror\work
+# Only show the differences and write the report (never changes anything)
+mirror -s \\server\share\work -d E:\mirror\work --dry-run
 
-# Scheduled / unattended
-mirror sync --profile weekly --yes
+# Scheduled / unattended: apply without asking
+mirror --profile weekly --confirm false
 
-# Review a plan first, then apply exactly that plan
-mirror analyze -s ... -d ... -o plan.json
-mirror sync --plan plan.json
+# Review first, then apply exactly the reviewed result file
+mirror -s ... -d ... --dry-run -o plan.json
+mirror --plan plan.json
 ```
 
-Run `mirror` without a command to see how the tool works and its default settings, and
-`mirror analyze --help` / `mirror sync --help` for every option. Every run starts with a short
-summary of how it will work (match mode, deletions, safety limits, exclusions...).
+`--confirm` is `true` by default. Run `mirror` without folders to see how the tool works and its
+default settings, and `mirror --help` for every option. Every run starts with a short summary of
+how it will work (confirmation, match mode, deletions, safety limits, exclusions...).
 
 Files that exist only in the destination (for example, added there by mistake) are treated
 like files removed from the source: they are deleted from the mirror (to the Recycle Bin by
-default). `analyze` lists them under **Removed** first, so you can review them.
+default). The summary lists them under **Delete** before asking, so you can review them.
 
 ### Comparison modes (`--mode`)
 
@@ -54,7 +57,7 @@ The old version of each overwritten file is handled the same way (disable with
 
 ### Safety
 
-- `analyze` never changes anything; `sync` asks for confirmation unless `--yes`.
+- Nothing changes until you confirm (`--confirm false` skips the question); `--dry-run` never changes anything.
 - `--max-delete` (default 20%) blocks a sync that would delete too much of the mirror
   (for example when the source path is wrong or a share is temporarily empty).
 - Free space is checked before starting.
@@ -75,19 +78,26 @@ online-only cloud files are skipped and listed.
 
 ### Result file
 
-Every run writes `mirror-result-<date>.json` in the current folder (or `-o file.json` /
-`--format csv`) with the summary, every action (full source and destination paths, reason,
-status) and every problem. The full path is printed at the end of the run. A JSON result can be
-executed later with `sync --plan`.
+Every run writes a result file named with the run's start time and time zone, for example
+`folder-mirror-2026-10-09T143000-0500.json`, in the current folder or in `-o <folder>` (also
+`output_dir` in a profile). Names are always unique: if one is taken, `-2`, `-3`... is added.
+`--format csv` writes CSV instead of JSON. The file holds the summary, every action (full source
+and destination paths, reason, status) and every problem; its full path is printed at the end of
+the run. A JSON result can be applied later with `mirror --plan <file>`.
 
-An HTML report with the same name (`mirror-result-<date>.html`) is written next to it: summary
+The report is saved right after the analysis and updated in place after the sync, so the
+analysis is kept even if the sync is interrupted. It has two parts: **analysis** (when, how long,
+planned changes) and **execution** (when, how long, confirmed or automatic, done / failed per
+line), or the reason it was not executed (dry run, declined, blocked...).
+
+An HTML report with the same name (`.html`) is written next to it: summary
 cards, problems, and every action with filters and search. It is a single file; open it in any
 browser.
 
 ### Exit codes
 
-`0` in sync / success · `1` differences found (analyze) · `2` completed with problems ·
-`3` aborted (blocked by a safety check, not confirmed, or fatal error).
+`0` in sync / success · `1` differences found, not applied · `2` completed with problems ·
+`3` aborted (blocked by a safety check, no terminal to confirm, or fatal error).
 
 ### Profiles
 

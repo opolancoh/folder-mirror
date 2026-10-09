@@ -27,6 +27,15 @@ pub trait ProgressReporter: Send + Sync {
     /// A file failed during the step.
     fn problem(&self, _step: Step) {}
     fn step_finished(&self, _step: Step) {}
+
+    /// The sync started: `actions` to run, of which `bytes` are file data to copy.
+    /// After this, `advance(Step::Sync, 1)` marks a finished action and `bytes_copied` the data.
+    fn sync_started(&self, actions: u64, _bytes: u64) {
+        self.step_started(Step::Sync, Some(actions));
+    }
+
+    /// File data copied during the sync, as it is written.
+    fn bytes_copied(&self, _amount: u64) {}
 }
 
 /// Reporter that ignores every event.

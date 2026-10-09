@@ -76,28 +76,31 @@ impl Retry {
 /// Copies `source` over `destination` safely: the data goes to a temporary file next to the
 /// destination, which replaces the real file only when complete. An interrupted copy never
 /// leaves a half-written file. The old version is handed to `backup` when given.
+/// `on_progress` receives the bytes copied so far for this file.
 pub fn copy_file(
     source: &Path,
     destination: &Path,
     rel: &RelPath,
     backup: Option<&Deleter>,
     verify: bool,
+    on_progress: &dyn Fn(u64),
 ) -> Result<(), Failure> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
     let temp = temp_path(destination);
     files::remove_quietly(&temp);
-    let result = copy_to_temp(source, &temp, verify).and_then(|()| replace(&temp, destination, rel, backup));
+    let result = copy_to_temp(source, &temp, verify, on_progress)
+        .and_then(|()| replace(&temp, destination, rel, backup));
     if result.is_err() {
         files::remove_quietly(&temp);
     }
     result
 }
 
-fn copy_to_temp(source: &Path, temp: &Path, verify: bool) -> Result<(), Failure> {
+fn copy_to_temp(source: &Path, temp: &Path, verify: bool, on_progress: &dyn Fn(u64)) -> Result<(), Failure> {
     let before = fs::metadata(source)?;
-    fs::copy(source, temp)?;
+    copy_with_progress(source, temp, on_progress)?;
     let after = fs::metadata(source)?;
     if changed(&before, &after) {
         return Err(Failure::new(
@@ -144,6 +147,71 @@ pub fn rename_case(from: &Path, to: &Path) -> Result<(), Failure> {
         let _ = fs::rename(&temp, from);
         return Err(err.into());
     }
+    Ok(())
+}
+
+/// Copies a file like `fs::copy` (data, attributes / permissions), reporting the bytes copied
+/// so far. On Windows this is the native `CopyFileExW` with its progress callback.
+#[cfg(windows)]
+fn copy_with_progress(source: &Path, target: &Path, on_progress: &dyn Fn(u64)) -> io::Result<()> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{CopyFileExW, LPPROGRESS_ROUTINE_CALLBACK_REASON};
+
+    const PROGRESS_CONTINUE: u32 = 0;
+
+    unsafe extern "system" fn callback(
+        _total_size: i64,
+        transferred: i64,
+        _stream_size: i64,
+        _stream_transferred: i64,
+        _stream_number: u32,
+        _reason: LPPROGRESS_ROUTINE_CALLBACK_REASON,
+        _source: HANDLE,
+        _target: HANDLE,
+        data: *const c_void,
+    ) -> u32 {
+        // SAFETY: `data` is the `&&dyn Fn(u64)` passed to CopyFileExW below, which outlives the call.
+        let on_progress = unsafe { &*(data as *const &dyn Fn(u64)) };
+        on_progress(transferred.max(0) as u64);
+        PROGRESS_CONTINUE
+    }
+
+    let wide = |path: &Path| path.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let (from, to) = (wide(source), wide(target));
+    let data: *const &dyn Fn(u64) = &on_progress;
+    // SAFETY: both paths are NUL-terminated UTF-16 buffers alive for the call, and `data`
+    // points to a live closure reference; the callback only reads it.
+    let ok = unsafe {
+        CopyFileExW(from.as_ptr(), to.as_ptr(), Some(callback), data as *const c_void, std::ptr::null_mut(), 0)
+    };
+    if ok == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn copy_with_progress(source: &Path, target: &Path, on_progress: &dyn Fn(u64)) -> io::Result<()> {
+    use std::io::{Read, Write};
+
+    let mut input = fs::File::open(source)?;
+    let mut output = fs::File::create(target)?;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut copied = 0u64;
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        output.write_all(&buffer[..read])?;
+        copied += read as u64;
+        on_progress(copied);
+    }
+    output.flush()?;
+    fs::set_permissions(target, input.metadata()?.permissions())?;
     Ok(())
 }
 

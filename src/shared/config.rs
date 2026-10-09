@@ -126,6 +126,8 @@ pub struct Settings {
     pub stop_on_error: bool,
     pub threads: Option<usize>,
     pub max_errors_shown: usize,
+    /// Folder for the result file and HTML report (`None` = current folder).
+    pub report_dir: Option<PathBuf>,
 }
 
 impl Settings {
@@ -147,6 +149,7 @@ impl Settings {
             stop_on_error: false,
             threads: None,
             max_errors_shown: 7,
+            report_dir: None,
         }
     }
 
@@ -188,6 +191,9 @@ impl Settings {
         }
         if profile.threads.is_some() {
             self.threads = profile.threads;
+        }
+        if profile.output_dir.is_some() {
+            self.report_dir = profile.output_dir.clone();
         }
         if let Some(count) = profile.max_errors_shown {
             self.max_errors_shown = count;
@@ -242,6 +248,8 @@ pub struct Profile {
     pub stop_on_error: Option<bool>,
     pub threads: Option<usize>,
     pub max_errors_shown: Option<usize>,
+    /// Folder for the reports; relative paths are relative to the config file.
+    pub output_dir: Option<PathBuf>,
 }
 
 /// The `mirror.toml` file: `[profiles.<name>]` tables.

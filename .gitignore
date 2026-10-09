@@ -1,6 +1,6 @@
 /target
-mirror-result-*.json
-mirror-result-*.csv
-mirror-result-*.html
+folder-mirror-*.json
+folder-mirror-*.csv
+folder-mirror-*.html
 mirror.toml
 /dist

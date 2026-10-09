@@ -8,10 +8,12 @@ pub use html::write_html;
 pub use json::read_plan;
 
 use std::fmt;
+use std::fs::{self, OpenOptions};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use chrono::Local;
+use chrono::{DateTime, Local};
 
 use crate::features::plan::SyncPlan;
 use crate::shared::error::Result;
@@ -56,13 +58,33 @@ impl fmt::Display for ReportFormat {
     }
 }
 
-/// `mirror-result-2026-10-08_143000.json` in the current folder.
-pub fn default_report_path(format: ReportFormat) -> PathBuf {
-    PathBuf::from(format!(
-        "mirror-result-{}.{}",
-        Local::now().format("%Y-%m-%d_%H%M%S"),
-        format.extension()
-    ))
+/// Where a run's reports go: the result file and the HTML report share one name.
+#[derive(Debug, Clone)]
+pub struct ReportPaths {
+    pub result: PathBuf,
+    pub html: PathBuf,
+}
+
+/// Picks unique report names in `dir` (created if missing), based on `time` with its time zone:
+/// `folder-mirror-2026-10-09T143000-0500.json` + `.html`. If that name is taken, `-2`, `-3`...
+/// is added. The result file is created empty right away so no other run can take the name.
+pub fn report_paths(dir: &Path, format: ReportFormat, time: DateTime<Local>) -> Result<ReportPaths> {
+    fs::create_dir_all(dir)?;
+    let base = format!("folder-mirror-{}", time.format("%Y-%m-%dT%H%M%S%z"));
+    for attempt in 1u32.. {
+        let stem = if attempt == 1 { base.clone() } else { format!("{base}-{attempt}") };
+        let result = dir.join(format!("{stem}.{}", format.extension()));
+        let html = dir.join(format!("{stem}.html"));
+        if html.exists() {
+            continue;
+        }
+        match OpenOptions::new().write(true).create_new(true).open(&result) {
+            Ok(_) => return Ok(ReportPaths { result, html }),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    unreachable!("an unused report name always exists")
 }
 
 pub fn write_report(plan: &SyncPlan, path: &Path, format: ReportFormat) -> Result<()> {

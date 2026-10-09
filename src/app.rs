@@ -3,9 +3,12 @@
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
+
+use chrono::{Local, SecondsFormat};
 
 use crate::features::compare::{self, CompareOptions};
-use crate::features::plan::{self, SyncPlan};
+use crate::features::plan::{self, AnalysisInfo, SyncPlan};
 use crate::features::report;
 use crate::features::scan::{self, Excludes};
 use crate::features::sync;
@@ -27,6 +30,8 @@ pub fn configure_threads(settings: &Settings) -> Result<()> {
 
 /// Scans both folders, compares them and returns the plan. Changes nothing.
 pub fn analyze(settings: &Settings, progress: &dyn ProgressReporter) -> Result<SyncPlan> {
+    let started = Local::now();
+    let clock = Instant::now();
     let source_root = paths::resolve_root(&settings.source)?;
     let destination_root = paths::resolve_root(&settings.destination)?;
     if paths::overlaps(&source_root, &destination_root) {
@@ -46,6 +51,11 @@ pub fn analyze(settings: &Settings, progress: &dyn ProgressReporter) -> Result<S
 
     let mut plan = plan::build_plan(diff, source, destination, settings, case_insensitive);
     plan::check_safety(&mut plan, settings);
+    plan.analysis = AnalysisInfo {
+        started_at: started.to_rfc3339_opts(SecondsFormat::Secs, false),
+        finished_at: Local::now().to_rfc3339_opts(SecondsFormat::Secs, false),
+        duration_secs: clock.elapsed().as_secs_f64(),
+    };
     Ok(plan)
 }
 
@@ -62,16 +72,20 @@ pub fn load_plan(path: &Path) -> Result<SyncPlan> {
 }
 
 /// Executes the plan. Refuses to run when a safety check failed.
+/// `confirmation` records how the sync was started, for the report.
 pub fn sync(
     plan: &mut SyncPlan,
     settings: &Settings,
     progress: &dyn ProgressReporter,
     cancel: &AtomicBool,
+    confirmation: &str,
 ) -> Result<()> {
     if !plan.blockers.is_empty() {
         return Err(MirrorError::Blocked(plan.blockers.clone()));
     }
-    let execution = sync::execute(plan, settings, progress, cancel);
+    let mut execution = sync::execute(plan, settings, progress, cancel);
+    execution.confirmation = confirmation.to_string();
+    plan.not_executed = None;
     plan.execution = Some(execution);
     let code = plan.exit_code();
     if let Some(execution) = plan.execution.as_mut() {

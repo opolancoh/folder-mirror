@@ -43,6 +43,11 @@
   .alert { border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
   .alert.bad { background: var(--red-bg); color: var(--red); }
   .alert.warn { background: var(--amber-bg); color: var(--amber); }
+  .alert.info { background: var(--blue-bg); color: var(--blue); }
+  h2 .sub { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 10px; }
+  h3 { font-size: 13px; margin: 16px 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .small { font-size: 12px; }
+  section .cards { margin-bottom: 8px; }
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
   .chip { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 999px;
           padding: 4px 12px; cursor: pointer; font: inherit; font-size: 13px; }
@@ -100,74 +105,101 @@
     rename_case: 'Rename case', create_dir: 'Create folder', remove_dir: 'Remove folder'
   };
 
-  // Header
-  const status = {
-    0: ['ok', executed ? 'Completed · folders in sync' : 'In sync'],
-    1: ['diff', 'Differences found · nothing changed'],
-    2: ['warn', executed ? 'Completed with problems' : 'Problems found'],
-    3: ['bad', executed ? 'Aborted' : 'Not synced · nothing changed'],
-  }[exit_code] || ['bad', 'Aborted'];
-  const header = el('header');
-  header.append(el('h1', null, executed ? 'Sync report' : 'Analysis report'), el('span', 'badge ' + status[0], status[1]));
-  app.append(header);
-  document.title = (executed ? 'Sync report' : 'Analysis report') + ' · ' + plan.created_at;
-
-  // Details
-  const meta = el('dl', 'meta');
-  const addMeta = (label, value) => { if (value !== undefined && value !== null && value !== '') meta.append(el('dt', null, label), el('dd', null, value)); };
-  addMeta('Source', plan.source);
-  addMeta('Destination', plan.destination);
-  addMeta('Analyzed', plan.created_at.replace('T', ' '));
-  addMeta('Match files', plan.mode);
-  addMeta('Removed files', plan.delete_mode);
-  if (executed) {
-    const x = plan.execution;
-    addMeta('Synced', x.started_at.replace('T', ' ') + '  (' + x.duration_secs.toFixed(1) + ' s)');
-    addMeta('Deleted with', x.delete_mode_used);
-    addMeta('Trash folder', x.trash_folder);
-  }
-  addMeta('Exit code', exit_code);
-  const metaPanel = el('div', 'panel');
-  metaPanel.append(meta);
-  app.append(metaPanel);
-
-  // Summary cards
+  const when = (iso) => (iso || '').replace('T', ' ');
+  const secs = (n) => n < 60 ? n.toFixed(1) + ' s' : Math.floor(n / 60) + 'm ' + Math.round(n % 60) + 's';
   const s = plan.summary;
-  const cards = el('div', 'cards');
-  const card = (label, color, counter, extra) => {
-    const c = el('div', 'card');
-    c.style.setProperty('--c', color);
-    const value = typeof counter === 'object'
-      ? (executed ? num(counter.done) + ' / ' + num(counter.planned) : num(counter.planned))
-      : num(counter);
-    let extraText = extra || '';
-    let fail = false;
-    if (typeof counter === 'object' && executed && (counter.failed || counter.skipped)) {
-      extraText = [counter.failed ? num(counter.failed) + ' failed' : '', counter.skipped ? num(counter.skipped) + ' skipped' : '']
-        .filter(Boolean).join(' · ');
-      fail = true;
-    }
-    c.append(el('div', 'label', label), el('div', 'value', value), el('div', 'extra' + (fail ? ' fail' : ''), extraText));
-    cards.append(c);
-  };
-  card('Added', 'var(--green)', s.added, s.bytes_added ? bytes(s.bytes_added) : '');
-  card('Modified', 'var(--amber)', s.modified, s.bytes_modified ? bytes(s.bytes_modified) : '');
-  card('Removed', 'var(--red)', s.removed);
-  if (s.time_updated.planned) card('Time only', 'var(--cyan)', s.time_updated, 'same content');
-  if (s.renamed.planned) card('Renamed', 'var(--cyan)', s.renamed, 'letter case');
-  if (s.dirs_created.planned) card('New folders', 'var(--green)', s.dirs_created);
-  if (s.dirs_removed.planned) card('Old folders', 'var(--red)', s.dirs_removed);
-  card('Unchanged', 'var(--gray)', s.unchanged, num(s.source_files) + ' source files');
-  card('Problems', s.problems.total ? 'var(--red)' : 'var(--gray)', s.problems.total, s.skipped_entries ? num(s.skipped_entries) + ' skipped entries' : '');
-  app.append(cards);
+  const x = plan.execution;
 
-  // Alerts
-  const warnings = (plan.warnings || []).concat(executed ? (plan.execution.warnings || []) : []);
-  if (plan.blockers.length || warnings.length) {
-    const panel = el('div', 'panel');
-    plan.blockers.forEach((b) => panel.append(el('div', 'alert bad', '✖ Blocked: ' + b)));
-    warnings.forEach((w) => panel.append(el('div', 'alert warn', '⚠ ' + w)));
+  // Header
+  let status;
+  if (!executed && !plan.not_executed) {
+    status = ['warn', 'Not finished · analysis only'];
+  } else {
+    status = {
+      0: ['ok', executed ? 'Completed · folders in sync' : 'In sync'],
+      1: ['diff', 'Differences found · not applied'],
+      2: ['warn', executed ? 'Completed with problems' : 'Problems found'],
+      3: ['bad', 'Not applied'],
+    }[exit_code] || ['bad', 'Aborted'];
+  }
+  const header = el('header');
+  header.append(el('h1', null, 'Folder mirror report'), el('span', 'badge ' + status[0], status[1]));
+  app.append(header);
+  document.title = 'Folder mirror report · ' + when(plan.analysis.started_at || plan.created_at);
+
+  const section = (title, subtitle) => {
+    const panel = el('section', 'panel');
+    const h = el('h2', null, title);
+    if (subtitle) h.append(el('span', 'sub', subtitle));
+    panel.append(h);
     app.append(panel);
+    return panel;
+  };
+  const metaList = (panel, items) => {
+    const dl = el('dl', 'meta');
+    items.forEach(([label, value]) => {
+      if (value !== undefined && value !== null && value !== '') dl.append(el('dt', null, label), el('dd', null, value));
+    });
+    panel.append(dl);
+  };
+  // Change cards; `result` shows done / planned and failures instead of planned counts.
+  const changeCards = (panel, title, result) => {
+    panel.append(el('h3', null, title));
+    const cards = el('div', 'cards');
+    const card = (label, color, counter, extra) => {
+      const c = el('div', 'card');
+      c.style.setProperty('--c', color);
+      const value = typeof counter !== 'object' ? num(counter)
+        : result ? num(counter.done) + ' / ' + num(counter.planned) : num(counter.planned);
+      let extraText = extra || '';
+      let fail = false;
+      if (result && typeof counter === 'object' && (counter.failed || counter.skipped)) {
+        extraText = [counter.failed ? num(counter.failed) + ' failed' : '', counter.skipped ? num(counter.skipped) + ' skipped' : '']
+          .filter(Boolean).join(' · ');
+        fail = true;
+      }
+      c.append(el('div', 'label', label), el('div', 'value', value), el('div', 'extra' + (fail ? ' fail' : ''), extraText));
+      cards.append(c);
+    };
+    card('Copy (new)', 'var(--green)', s.added, s.bytes_added ? bytes(s.bytes_added) : 'missing in the destination');
+    card('Overwrite', 'var(--amber)', s.modified, s.bytes_modified ? bytes(s.bytes_modified) : 'changed in the source');
+    card('Delete', 'var(--red)', s.removed, s.bytes_removed ? bytes(s.bytes_removed) : 'no longer in the source');
+    if (s.renamed.planned) card('Rename', 'var(--cyan)', s.renamed, 'letter case only');
+    if (s.time_updated.planned) card('Update time', 'var(--cyan)', s.time_updated, 'same content');
+    if (s.dirs_created.planned) card('Create folders', 'var(--green)', s.dirs_created);
+    if (s.dirs_removed.planned) card('Delete folders', 'var(--red)', s.dirs_removed);
+    card('Already identical', 'var(--gray)', s.unchanged, 'files');
+    panel.append(cards);
+  };
+
+  // Analysis
+  const a = plan.analysis || {};
+  const analysis = section('Analysis', [when(a.started_at || plan.created_at), a.duration_secs ? secs(a.duration_secs) : ''].filter(Boolean).join(' · '));
+  metaList(analysis, [
+    ['Source', plan.source + '   (' + num(s.source_files) + ' files)'],
+    ['Destination', plan.destination + '   (' + num(s.destination_files) + ' files)'],
+    ['Match files', plan.mode],
+    ['Removed files go to', plan.delete_mode],
+  ]);
+  changeCards(analysis, 'Planned changes to the destination', false);
+  plan.blockers.forEach((b) => analysis.append(el('div', 'alert bad', '✖ Blocked: ' + b)));
+  (plan.warnings || []).forEach((w) => analysis.append(el('div', 'alert warn', '⚠ ' + w)));
+
+  // Execution
+  const execution = section('Execution', x ? when(x.started_at) + ' · ' + secs(x.duration_secs) : '');
+  if (x) {
+    metaList(execution, [
+      ['Started', x.confirmation],
+      ['Deleted files went to', x.trash_folder || x.delete_mode_used],
+      ['Exit code', exit_code],
+    ]);
+    changeCards(execution, 'Changes made to the destination', true);
+    if (x.cancelled) execution.append(el('div', 'alert warn', '⚠ The sync was cancelled before the end; run it again to finish.'));
+    (x.warnings || []).forEach((w) => execution.append(el('div', 'alert warn', '⚠ ' + w)));
+  } else if (plan.not_executed) {
+    execution.append(el('div', 'alert info', 'Not executed: ' + plan.not_executed + '. Nothing was changed in the destination.'));
+  } else {
+    execution.append(el('div', 'alert warn', 'Not finished: the sync is still running or was interrupted. This report shows the analysis only.'));
   }
 
   // Problems
@@ -233,7 +265,7 @@
     const table = el('table');
     const thead = el('thead');
     const head = el('tr');
-    ['Action', 'Status', 'Path', 'Size', 'Details'].forEach((h) => head.append(el('th', null, h)));
+    ['Planned', 'Result', 'Path', 'Size'].forEach((h) => head.append(el('th', null, h)));
     thead.append(head);
     const tbody = el('tbody');
     table.append(thead, tbody);
@@ -249,22 +281,27 @@
         (!filters.text || (a.destination + ' ' + (a.source || '')).toLowerCase().includes(filters.text)));
       matches.slice(0, MAX_ROWS).forEach((a) => {
         const tr = el('tr');
-        const kind = el('td');
-        kind.append(el('span', 'tag t-' + a.action, LABELS[a.action] || a.action));
+        const planned = el('td');
+        planned.append(el('span', 'tag t-' + a.action, LABELS[a.action] || a.action));
+        planned.append(el('div', 'muted small', a.reason.replace(/_/g, ' ')));
+        const result = el('td');
+        if (a.status === 'pending') {
+          result.append(el('span', 's-pending', plan.not_executed ? 'not executed' : 'pending'));
+        } else {
+          result.append(el('span', 's-' + a.status, a.status));
+        }
+        if (a.error) result.append(el('div', 'error', (a.problem ? a.problem + ': ' : '') + a.error));
         const path = el('td', 'path');
         path.append(el('div', null, a.destination));
         if (a.source) path.append(el('div', 'src', 'from ' + a.source));
         if (a.from_path) path.append(el('div', 'src', 'was ' + a.from_path));
-        const details = el('td');
-        details.append(el('div', 'muted', a.reason.replace(/_/g, ' ')));
-        if (a.error) details.append(el('div', 'error', (a.problem ? a.problem + ': ' : '') + a.error));
-        tr.append(kind, el('td', 's-' + a.status, a.status), path, el('td', 'num', a.size != null ? bytes(a.size) : ''), details);
+        tr.append(planned, result, path, el('td', 'num', a.size != null ? bytes(a.size) : ''));
         tbody.append(tr);
       });
       if (!matches.length) {
         const tr = el('tr');
         const td = el('td', 'empty', 'No actions match the filters.');
-        td.colSpan = 5;
+        td.colSpan = 4;
         tr.append(td);
         tbody.append(tr);
       }

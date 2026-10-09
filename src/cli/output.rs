@@ -8,6 +8,7 @@ use console::{style, StyledObject};
 use folder_mirror::features::plan::{exit_code_meaning, Counter, SyncPlan};
 use folder_mirror::shared::config::{CompareMode, DeleteMode, Settings};
 use folder_mirror::shared::error::Problem;
+use folder_mirror::shared::files::TRASH_DIR_NAME;
 use folder_mirror::shared::format::{format_bytes, format_count};
 
 /// Shown when the tool runs without a command.
@@ -15,31 +16,47 @@ pub fn print_overview() {
     println!("{}", style("mirror · keeps a mirror folder identical to its source folder (one-way)").bold());
     println!();
     println!("{}", style("How it works").bold());
-    println!("  1. analyze  scans both folders and lists what differs. Changes nothing.");
-    println!("  2. sync     shows the same summary, asks for confirmation, then copies new files,");
-    println!("              overwrites edited files and removes deleted files from the mirror.");
-    println!("  The source is always right. Each run writes a result file with every file's full");
-    println!("  path and action. Failed files never stop the sync; they are listed at the end.");
+    println!("  1. Scans both folders and shows what will change in the destination.");
+    println!("  2. Asks \"Proceed with sync?\" (skip the question with --confirm false).");
+    println!("  3. Copies new files, overwrites edited files and deletes files that are no longer");
+    println!("     in the source, so the destination ends up identical to the source.");
+    println!("  The source is never changed. Each run writes a result file and an HTML report with");
+    println!("  every file's full path and action. Failed files never stop the sync.");
     println!();
     println!("{}", style("Default settings").bold());
+    line("Confirmation", "asks before changing anything (--confirm true)".into());
     print_setting_lines(&Settings::new("", ""));
     println!();
     println!("{}", style("Examples").bold());
-    println!("  mirror analyze -s \"C:\\source\" -d \"D:\\mirror\"");
-    println!("  mirror sync    -s \"C:\\source\" -d \"D:\\mirror\"");
-    println!("  mirror sync --help        all options");
+    println!("  mirror -s \"C:\\source\" -d \"D:\\mirror\"                   analyze, ask, apply");
+    println!("  mirror -s \"C:\\source\" -d \"D:\\mirror\" --dry-run         only show the differences");
+    println!("  mirror -s \"C:\\source\" -d \"D:\\mirror\" --confirm false   apply without asking");
+    println!("  mirror --help                                           all options");
 }
 
-/// The settings a run will use; `*` marks values changed from the default.
+/// Whether the run asks, applies automatically, or only reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunMode {
+    Ask,
+    Automatic,
+    DryRun,
+}
+
 /// How this run will work, from the effective settings (defaults or given by the user).
-pub fn print_settings(settings: &Settings, command: &str) {
+pub fn print_settings(settings: &Settings, mode: RunMode) {
     println!();
-    let what = if command == "sync" {
-        "makes the destination identical to the source, after your confirmation"
-    } else {
-        "compares both folders and reports the differences; nothing is changed"
+    let what = match mode {
+        RunMode::Ask => "makes the destination identical to the source, after your confirmation",
+        RunMode::Automatic => "makes the destination identical to the source, without asking (--confirm false)",
+        RunMode::DryRun => "dry run: shows the differences and writes the report; nothing is changed",
     };
-    println!("{} {command} · {what}", style("mirror").bold());
+    println!("{} · {what}", style("mirror").bold());
+    let confirmation = match mode {
+        RunMode::Ask => "asks before changing anything",
+        RunMode::Automatic => "no, changes are applied automatically",
+        RunMode::DryRun => "not needed, nothing will be changed",
+    };
+    line("Confirmation", confirmation.into());
     let full = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()).display().to_string();
     line("Source", full(&settings.source));
     line("Destination", full(&settings.destination));
@@ -125,52 +142,49 @@ fn delete_help(mode: DeleteMode) -> &'static str {
     }
 }
 
-/// Summary of what the sync would do.
+/// What the sync will change in the destination.
 pub fn print_analysis(plan: &SyncPlan, settings: &Settings) {
     let s = &plan.summary;
-    println!(
-        "Scanned {} source / {} destination files",
-        format_count(s.source_files),
-        format_count(s.destination_files)
-    );
+    print_sides(plan);
     println!();
-    row(style("+").green(), "Added", &format_count(s.added.planned), sized(s.bytes_added));
-    row(style("~").yellow(), "Modified", &format_count(s.modified.planned), sized(s.bytes_modified));
-    row(style("-").red(), "Removed", &format_count(s.removed.planned), String::new());
-    print_optional_rows(plan, |c| format_count(c.planned));
-    row(style("=").dim(), "Unchanged", &format_count(s.unchanged), String::new());
-
+    if plan.actions.is_empty() {
+        println!(
+            "Changes to the destination ({}): {}, it is already identical to the source ({}).",
+            plan.destination,
+            style("none").green().bold(),
+            files(s.source_files)
+        );
+    } else {
+        println!("{}", style(format!("Changes to the destination ({}):", plan.destination)).bold());
+        print_change_rows(plan, |c| format_count(c.planned));
+        let after = s.destination_files + s.added.planned - s.removed.planned;
+        let same = if after == s.source_files { ", the same as the source" } else { "" };
+        println!();
+        println!("After sync: the destination will have {}{same}.", files(after));
+    }
     print_issues(plan, &plan.warnings, settings);
 }
 
-/// Outcome of the sync: done / planned per category, failures and problems.
+/// What the sync changed in the destination: done / planned per line.
 pub fn print_sync_result(plan: &SyncPlan, settings: &Settings) {
-    let s = &plan.summary;
     let Some(execution) = &plan.execution else { return };
     println!();
-    let headline = format!("Sync finished in {}", duration(execution.duration_secs));
-    if execution.cancelled {
-        println!("{} (cancelled before the end)", style(headline).yellow().bold());
-    } else {
-        println!("{}", style(headline).bold());
-    }
-    row(style("+").green(), "Added", &progress_of(&s.added), String::new());
-    row(style("~").yellow(), "Modified", &progress_of(&s.modified), String::new());
-    let removed_note = match &execution.trash_folder {
-        Some(folder) => format!("(moved to {folder})"),
-        None => format!("({})", execution.delete_mode_used),
-    };
-    let removed_note = if s.removed.done > 0 { removed_note } else { String::new() };
-    row(style("-").red(), "Removed", &progress_of(&s.removed), removed_note);
-    print_optional_rows(plan, progress_of);
-    row(style("=").dim(), "Unchanged", &format_count(s.unchanged), String::new());
-
-    print_issues(plan, &execution.warnings, settings);
-}
-
-pub fn print_in_sync() {
+    let headline = format!(
+        "Sync finished in {} · changes made to the destination ({}):",
+        duration(execution.duration_secs),
+        plan.destination
+    );
+    println!("{}", style(headline).bold());
+    print_change_rows(plan, |c| format!("{} / {}", format_count(c.done), format_count(c.planned)));
     println!();
-    println!("{}", style("✔ Already in sync, nothing to do.").green().bold());
+    if execution.cancelled {
+        println!("{}", style("The sync was cancelled before the end; run it again to finish.").yellow());
+    } else if plan.summary.problems.total > 0 {
+        println!("{}", style("Some changes could not be made; see the problems below and run the sync again.").yellow());
+    } else {
+        println!("{}", style("The destination is now identical to the source.").green());
+    }
+    print_issues(plan, &execution.warnings, settings);
 }
 
 pub fn print_declined() {
@@ -180,7 +194,7 @@ pub fn print_declined() {
 pub fn print_not_interactive() {
     println!();
     println!(
-        "{} Not running in an interactive terminal, so no confirmation can be asked. Add --yes to sync unattended.",
+        "{} Not running in an interactive terminal, so no confirmation can be asked. Nothing was changed; add --confirm false to apply changes unattended.",
         style("✖").red()
     );
 }
@@ -197,20 +211,111 @@ pub fn print_fatal(err: &anyhow::Error) {
     eprintln!("{} {err:#}", style("error:").red().bold());
 }
 
-fn print_optional_rows(plan: &SyncPlan, value: impl Fn(&Counter) -> String) {
+fn print_sides(plan: &SyncPlan) {
     let s = &plan.summary;
-    if s.time_updated.planned > 0 {
-        row(style("↻").cyan(), "Time only", &value(&s.time_updated), "(content identical, timestamp updated)".into());
+    let width = plan.source.chars().count().max(plan.destination.chars().count());
+    println!("{:<12} {:<width$}   {}", "Source", plan.source, files(s.source_files));
+    println!("{:<12} {:<width$}   {}", "Destination", plan.destination, files(s.destination_files));
+}
+
+/// One line per kind of change; `value` renders the count (planned, or done / planned).
+fn print_change_rows(plan: &SyncPlan, value: impl Fn(&Counter) -> String) {
+    struct Row {
+        symbol: StyledObject<&'static str>,
+        label: &'static str,
+        count: String,
+        unit: &'static str,
+        size: String,
+        note: String,
+        failures: String,
     }
+
+    let s = &plan.summary;
+    let mut rows = Vec::new();
+    let mut add = |symbol, label, counter: &Counter, unit: &'static str, bytes: u64, note: String| {
+        let unit = if unit == "files" && counter.planned == 1 { "file" } else { unit };
+        let mut failures = Vec::new();
+        if counter.failed > 0 {
+            failures.push(format!("{} failed", format_count(counter.failed)));
+        }
+        if counter.skipped > 0 {
+            failures.push(format!("{} skipped", format_count(counter.skipped)));
+        }
+        rows.push(Row {
+            symbol,
+            label,
+            count: value(counter),
+            unit,
+            size: if bytes > 0 { format_bytes(bytes) } else { String::new() },
+            note,
+            failures: if failures.is_empty() { String::new() } else { format!("  ({})", failures.join(", ")) },
+        });
+    };
+
+    add(style("+").green(), "Copy (new)", &s.added, "files", s.bytes_added, "in the source, missing in the destination".into());
+    add(style("~").yellow(), "Overwrite", &s.modified, "files", s.bytes_modified, "changed in the source".into());
+    add(style("-").red(), "Delete", &s.removed, "files", s.bytes_removed, format!("no longer in the source {}", delete_target(plan)));
     if s.renamed.planned > 0 {
-        row(style("⇄").cyan(), "Renamed", &value(&s.renamed), "(letter case only)".into());
+        add(style("⇄").cyan(), "Rename", &s.renamed, "files", 0, "letter case only".into());
+    }
+    if s.time_updated.planned > 0 {
+        add(style("↻").cyan(), "Update time", &s.time_updated, "files", 0, "same content, timestamp only".into());
     }
     if s.dirs_created.planned > 0 {
-        row(style("▸").green(), "New folders", &value(&s.dirs_created), String::new());
+        add(style("▸").green(), "Create folders", &s.dirs_created, "", 0, String::new());
     }
     if s.dirs_removed.planned > 0 {
-        row(style("▸").red(), "Old folders", &value(&s.dirs_removed), "(removed)".into());
+        add(style("▸").red(), "Delete folders", &s.dirs_removed, "", 0, "no longer in the source".into());
     }
+    rows.push(Row {
+        symbol: style("=").dim(),
+        label: "Already identical",
+        count: format_count(s.unchanged),
+        unit: if s.unchanged == 1 { "file" } else { "files" },
+        size: String::new(),
+        note: String::new(),
+        failures: String::new(),
+    });
+
+    let count_width = rows.iter().map(|r| r.count.len()).max().unwrap_or(0);
+    let size_width = rows.iter().map(|r| r.size.len()).max().unwrap_or(0);
+    for row in rows {
+        println!(
+            "  {} {:<17} {:>count_width$} {:<5}  {:>size_width$}   {}{}",
+            row.symbol,
+            row.label,
+            row.count,
+            row.unit,
+            row.size,
+            style(row.note).dim(),
+            style(row.failures).red()
+        );
+    }
+}
+
+/// Where deleted files go, for the summary.
+fn delete_target(plan: &SyncPlan) -> String {
+    if let Some(execution) = &plan.execution {
+        if let Some(folder) = &execution.trash_folder {
+            // The run folder inside the destination: .mirror-trash\<date>
+            let run = Path::new(folder).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            return format!("→ {}", Path::new(TRASH_DIR_NAME).join(run).display());
+        }
+        return delete_mode_target(execution.delete_mode_used).to_string();
+    }
+    delete_mode_target(plan.delete_mode).to_string()
+}
+
+fn delete_mode_target(mode: DeleteMode) -> &'static str {
+    match mode {
+        DeleteMode::RecycleBin => "→ Recycle Bin",
+        DeleteMode::TrashFolder => "→ .mirror-trash folder",
+        DeleteMode::Permanent => "→ deleted permanently",
+    }
+}
+
+fn files(count: u64) -> String {
+    format!("{} file{}", format_count(count), if count == 1 { "" } else { "s" })
 }
 
 fn print_issues(plan: &SyncPlan, warnings: &[String], settings: &Settings) {
@@ -269,29 +374,6 @@ fn print_problems(problems: &[Problem], max_shown: usize) {
         }
         println!("  Full list with paths in the result file.");
     }
-}
-
-fn row(symbol: StyledObject<&str>, label: &str, value: &str, note: String) {
-    println!("  {symbol} {:<12} {value:>10}  {}", format!("{label}:"), style(note).dim());
-}
-
-fn sized(bytes: u64) -> String {
-    if bytes > 0 {
-        format!("({})", format_bytes(bytes))
-    } else {
-        String::new()
-    }
-}
-
-fn progress_of(counter: &Counter) -> String {
-    let mut text = format!("{} / {}", format_count(counter.done), format_count(counter.planned));
-    if counter.failed > 0 {
-        text.push_str(&format!(" ({} failed)", format_count(counter.failed)));
-    }
-    if counter.skipped > 0 {
-        text.push_str(&format!(" ({} skipped)", format_count(counter.skipped)));
-    }
-    text
 }
 
 fn duration(seconds: f64) -> String {
