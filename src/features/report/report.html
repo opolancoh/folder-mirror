@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mirror report</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
+    --green: #1f9d55; --amber: #c27c0e; --red: #d64545; --blue: #2f6fde; --cyan: #138a9e; --gray: #8a93a6;
+    --green-bg: #e6f6ed; --amber-bg: #fdf3e1; --red-bg: #fbe9e9; --blue-bg: #e8f0fd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #98a0b3; --line: #2b313d;
+      --green: #4cc38a; --amber: #e5a43b; --red: #f07171; --blue: #6c9cf0; --cyan: #4cb8c9; --gray: #8a93a6;
+      --green-bg: #173326; --amber-bg: #3a2c12; --red-bg: #3d1d1f; --blue-bg: #1c2a45;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .ok { background: var(--green-bg); color: var(--green); }
+  .diff { background: var(--blue-bg); color: var(--blue); }
+  .warn { background: var(--amber-bg); color: var(--amber); }
+  .bad { background: var(--red-bg); color: var(--red); }
+  .muted { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .meta { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; }
+  .meta dt { color: var(--muted); }
+  .meta dd { margin: 0; word-break: break-all; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--c); border-radius: 10px; padding: 12px 14px; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .card .value { font-size: 24px; font-weight: 650; margin-top: 2px; }
+  .card .extra { color: var(--muted); font-size: 12px; min-height: 18px; }
+  .card .extra.fail { color: var(--red); }
+  .alert { border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .alert.bad { background: var(--red-bg); color: var(--red); }
+  .alert.warn { background: var(--amber-bg); color: var(--amber); }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .chip { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 999px;
+          padding: 4px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+  .chip.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+  input[type=search], select { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+          border-radius: 8px; padding: 6px 10px; font: inherit; }
+  input[type=search] { flex: 1; min-width: 200px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+       position: sticky; top: 0; background: var(--panel); }
+  td.path { word-break: break-all; }
+  td.path .src { color: var(--muted); font-size: 12px; }
+  td.num { text-align: right; white-space: nowrap; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .t-copy, .t-create_dir { background: var(--green-bg); color: var(--green); }
+  .t-overwrite, .t-update_time, .t-rename_case { background: var(--amber-bg); color: var(--amber); }
+  .t-delete, .t-remove_dir { background: var(--red-bg); color: var(--red); }
+  .s-done { color: var(--green); } .s-failed { color: var(--red); font-weight: 600; }
+  .s-skipped { color: var(--amber); } .s-pending { color: var(--muted); }
+  .error { color: var(--red); font-size: 12px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  details summary { cursor: pointer; font-weight: 600; }
+  footer { color: var(--muted); font-size: 12px; text-align: center; margin-top: 24px; }
+  .empty { color: var(--muted); padding: 16px 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script id="report-data" type="application/json">__REPORT_DATA__</script>
+<script>
+(() => {
+  const { plan, exit_code } = JSON.parse(document.getElementById('report-data').textContent);
+  const app = document.getElementById('app');
+  const executed = !!plan.execution;
+  const MAX_ROWS = 2000;
+
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  };
+  const num = (n) => Number(n || 0).toLocaleString();
+  const bytes = (n) => {
+    if (!n) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(1) : n) + ' ' + units[i];
+  };
+  const LABELS = {
+    copy: 'Copy (new)', overwrite: 'Overwrite', delete: 'Delete', update_time: 'Update time',
+    rename_case: 'Rename case', create_dir: 'Create folder', remove_dir: 'Remove folder'
+  };
+
+  // Header
+  const status = {
+    0: ['ok', executed ? 'Completed · folders in sync' : 'In sync'],
+    1: ['diff', 'Differences found · nothing changed'],
+    2: ['warn', executed ? 'Completed with problems' : 'Problems found'],
+    3: ['bad', executed ? 'Aborted' : 'Not synced · nothing changed'],
+  }[exit_code] || ['bad', 'Aborted'];
+  const header = el('header');
+  header.append(el('h1', null, executed ? 'Sync report' : 'Analysis report'), el('span', 'badge ' + status[0], status[1]));
+  app.append(header);
+  document.title = (executed ? 'Sync report' : 'Analysis report') + ' · ' + plan.created_at;
+
+  // Details
+  const meta = el('dl', 'meta');
+  const addMeta = (label, value) => { if (value !== undefined && value !== null && value !== '') meta.append(el('dt', null, label), el('dd', null, value)); };
+  addMeta('Source', plan.source);
+  addMeta('Destination', plan.destination);
+  addMeta('Analyzed', plan.created_at.replace('T', ' '));
+  addMeta('Match files', plan.mode);
+  addMeta('Removed files', plan.delete_mode);
+  if (executed) {
+    const x = plan.execution;
+    addMeta('Synced', x.started_at.replace('T', ' ') + '  (' + x.duration_secs.toFixed(1) + ' s)');
+    addMeta('Deleted with', x.delete_mode_used);
+    addMeta('Trash folder', x.trash_folder);
+  }
+  addMeta('Exit code', exit_code);
+  const metaPanel = el('div', 'panel');
+  metaPanel.append(meta);
+  app.append(metaPanel);
+
+  // Summary cards
+  const s = plan.summary;
+  const cards = el('div', 'cards');
+  const card = (label, color, counter, extra) => {
+    const c = el('div', 'card');
+    c.style.setProperty('--c', color);
+    const value = typeof counter === 'object'
+      ? (executed ? num(counter.done) + ' / ' + num(counter.planned) : num(counter.planned))
+      : num(counter);
+    let extraText = extra || '';
+    let fail = false;
+    if (typeof counter === 'object' && executed && (counter.failed || counter.skipped)) {
+      extraText = [counter.failed ? num(counter.failed) + ' failed' : '', counter.skipped ? num(counter.skipped) + ' skipped' : '']
+        .filter(Boolean).join(' · ');
+      fail = true;
+    }
+    c.append(el('div', 'label', label), el('div', 'value', value), el('div', 'extra' + (fail ? ' fail' : ''), extraText));
+    cards.append(c);
+  };
+  card('Added', 'var(--green)', s.added, s.bytes_added ? bytes(s.bytes_added) : '');
+  card('Modified', 'var(--amber)', s.modified, s.bytes_modified ? bytes(s.bytes_modified) : '');
+  card('Removed', 'var(--red)', s.removed);
+  if (s.time_updated.planned) card('Time only', 'var(--cyan)', s.time_updated, 'same content');
+  if (s.renamed.planned) card('Renamed', 'var(--cyan)', s.renamed, 'letter case');
+  if (s.dirs_created.planned) card('New folders', 'var(--green)', s.dirs_created);
+  if (s.dirs_removed.planned) card('Old folders', 'var(--red)', s.dirs_removed);
+  card('Unchanged', 'var(--gray)', s.unchanged, num(s.source_files) + ' source files');
+  card('Problems', s.problems.total ? 'var(--red)' : 'var(--gray)', s.problems.total, s.skipped_entries ? num(s.skipped_entries) + ' skipped entries' : '');
+  app.append(cards);
+
+  // Alerts
+  const warnings = (plan.warnings || []).concat(executed ? (plan.execution.warnings || []) : []);
+  if (plan.blockers.length || warnings.length) {
+    const panel = el('div', 'panel');
+    plan.blockers.forEach((b) => panel.append(el('div', 'alert bad', '✖ Blocked: ' + b)));
+    warnings.forEach((w) => panel.append(el('div', 'alert warn', '⚠ ' + w)));
+    app.append(panel);
+  }
+
+  // Problems
+  if (plan.problems.length) {
+    const panel = el('div', 'panel');
+    panel.append(el('h2', null, 'Problems (' + num(plan.problems.length) + ')'));
+    const wrap = el('div', 'table-wrap');
+    const table = el('table');
+    const head = el('tr');
+    ['Reason', 'Path', 'Error', 'Attempts'].forEach((h) => head.append(el('th', null, h)));
+    table.append(head);
+    plan.problems.slice(0, MAX_ROWS).forEach((p) => {
+      const tr = el('tr');
+      const reason = el('td');
+      reason.append(el('span', 'tag t-delete', p.reason));
+      const path = el('td', 'path');
+      path.append(el('div', null, p.source || p.destination || ''));
+      if (p.source && p.destination) path.append(el('div', 'src', '→ ' + p.destination));
+      tr.append(reason, path, el('td', 'error', p.error), el('td', 'num', p.attempts || ''));
+      table.append(tr);
+    });
+    wrap.append(table);
+    panel.append(wrap);
+    if (plan.problems.length > MAX_ROWS) panel.append(el('div', 'note', 'Showing the first ' + num(MAX_ROWS) + '. The JSON result file has the full list.'));
+    app.append(panel);
+  }
+
+  // Actions with filters
+  const actionsPanel = el('div', 'panel');
+  actionsPanel.append(el('h2', null, 'Actions (' + num(plan.actions.length) + ')'));
+  if (!plan.actions.length) {
+    actionsPanel.append(el('div', 'empty', 'Nothing to do. The destination already matches the source.'));
+  } else {
+    const filters = { kind: 'all', status: 'all', text: '' };
+    const toolbar = el('div', 'toolbar');
+    const counts = {};
+    plan.actions.forEach((a) => { counts[a.action] = (counts[a.action] || 0) + 1; });
+    const chips = [];
+    const addChip = (kind, label) => {
+      const chip = el('button', 'chip' + (kind === 'all' ? ' active' : ''), label);
+      chip.onclick = () => { filters.kind = kind; chips.forEach((c) => c.classList.remove('active')); chip.classList.add('active'); render(); };
+      chips.push(chip);
+      toolbar.append(chip);
+    };
+    addChip('all', 'All ' + num(plan.actions.length));
+    Object.keys(LABELS).filter((k) => counts[k]).forEach((k) => addChip(k, LABELS[k] + ' ' + num(counts[k])));
+
+    const statusSelect = el('select');
+    ['all', 'pending', 'done', 'failed', 'skipped'].forEach((st) => {
+      const o = el('option', null, st === 'all' ? 'Any status' : st);
+      o.value = st;
+      statusSelect.append(o);
+    });
+    statusSelect.onchange = () => { filters.status = statusSelect.value; render(); };
+    const search = el('input');
+    search.type = 'search';
+    search.placeholder = 'Search paths…';
+    search.oninput = () => { filters.text = search.value.toLowerCase(); render(); };
+    toolbar.append(statusSelect, search);
+    actionsPanel.append(toolbar);
+
+    const wrap = el('div', 'table-wrap');
+    const table = el('table');
+    const thead = el('thead');
+    const head = el('tr');
+    ['Action', 'Status', 'Path', 'Size', 'Details'].forEach((h) => head.append(el('th', null, h)));
+    thead.append(head);
+    const tbody = el('tbody');
+    table.append(thead, tbody);
+    wrap.append(table);
+    const note = el('div', 'note');
+    actionsPanel.append(wrap, note);
+
+    function render() {
+      tbody.replaceChildren();
+      const matches = plan.actions.filter((a) =>
+        (filters.kind === 'all' || a.action === filters.kind) &&
+        (filters.status === 'all' || a.status === filters.status) &&
+        (!filters.text || (a.destination + ' ' + (a.source || '')).toLowerCase().includes(filters.text)));
+      matches.slice(0, MAX_ROWS).forEach((a) => {
+        const tr = el('tr');
+        const kind = el('td');
+        kind.append(el('span', 'tag t-' + a.action, LABELS[a.action] || a.action));
+        const path = el('td', 'path');
+        path.append(el('div', null, a.destination));
+        if (a.source) path.append(el('div', 'src', 'from ' + a.source));
+        if (a.from_path) path.append(el('div', 'src', 'was ' + a.from_path));
+        const details = el('td');
+        details.append(el('div', 'muted', a.reason.replace(/_/g, ' ')));
+        if (a.error) details.append(el('div', 'error', (a.problem ? a.problem + ': ' : '') + a.error));
+        tr.append(kind, el('td', 's-' + a.status, a.status), path, el('td', 'num', a.size != null ? bytes(a.size) : ''), details);
+        tbody.append(tr);
+      });
+      if (!matches.length) {
+        const tr = el('tr');
+        const td = el('td', 'empty', 'No actions match the filters.');
+        td.colSpan = 5;
+        tr.append(td);
+        tbody.append(tr);
+      }
+      note.textContent = matches.length > MAX_ROWS
+        ? 'Showing ' + num(MAX_ROWS) + ' of ' + num(matches.length) + ' matching actions. Use the filters or the search to narrow down.'
+        : num(matches.length) + ' matching action' + (matches.length === 1 ? '' : 's');
+    }
+    render();
+  }
+  app.append(actionsPanel);
+
+  // Skipped entries
+  if (plan.skipped.length) {
+    const panel = el('div', 'panel');
+    const details = el('details');
+    details.append(el('summary', null, 'Skipped entries (' + num(plan.skipped.length) + ') · symbolic links, special or online-only files'));
+    const list = el('div', 'table-wrap');
+    const table = el('table');
+    plan.skipped.slice(0, MAX_ROWS).forEach((p) => {
+      const tr = el('tr');
+      const reason = el('td');
+      reason.append(el('span', 'tag t-overwrite', p.reason));
+      tr.append(reason, el('td', 'path', p.source || p.destination || ''), el('td', 'muted', p.error));
+      table.append(tr);
+    });
+    list.append(table);
+    details.append(list);
+    panel.append(details);
+    app.append(panel);
+  }
+
+  app.append(el('footer', null, 'Generated by folder-mirror ' + plan.tool_version));
+})();
+</script>
+</body>
+</html>

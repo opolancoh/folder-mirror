@@ -1,0 +1,24 @@
+# Copy this file to mirror.toml and run:  mirror sync --profile weekly
+# Every value is optional; command-line options override the profile.
+
+[profiles.weekly]
+source = '\\server\share\work'
+destination = 'E:\mirror\work'
+mode = "smart"                 # name | metadata | smart | quick-hash | full-hash
+mtime_tolerance = 2            # seconds
+exclude = ["*.tmp", "~$*", "cache/"]
+default_excludes = true        # skip Thumbs.db, .DS_Store, $RECYCLE.BIN...
+delete_mode = "recycle-bin"    # recycle-bin | trash-folder | permanent
+trash_keep = 4                 # runs kept in .mirror-trash
+backup_overwritten = true      # keep the old version of overwritten files
+max_delete = 20                # % of destination files; above it the sync is blocked
+retries = 3
+retry_delay = 2                # seconds, grows with each attempt
+verify = false
+stop_on_error = false
+max_errors_shown = 7
+
+[profiles.monthly-check]
+source = '\\server\share\work'
+destination = 'E:\mirror\work'
+mode = "full-hash"
