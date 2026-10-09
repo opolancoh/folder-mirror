@@ -13,7 +13,7 @@ use folder_mirror::shared::format::{format_bytes, format_count};
 
 /// Shown when the tool runs without a command.
 pub fn print_overview() {
-    println!("{}", style("mirror · keeps a mirror folder identical to its source folder (one-way)").bold());
+    println!("{}", style(concat!("mirror ", env!("CARGO_PKG_VERSION"), " · keeps a mirror folder identical to its source folder (one-way)")).bold());
     println!();
     println!("{}", style("How it works").bold());
     println!("  1. Scans both folders and shows what will change in the destination.");
@@ -50,7 +50,7 @@ pub fn print_settings(settings: &Settings, mode: RunMode) {
         RunMode::Automatic => "makes the destination identical to the source, without asking (--confirm false)",
         RunMode::DryRun => "dry run: shows the differences and writes the report; nothing is changed",
     };
-    println!("{} · {what}", style("mirror").bold());
+    println!("{} · {what}", style(concat!("mirror ", env!("CARGO_PKG_VERSION"))).bold());
     let confirmation = match mode {
         RunMode::Ask => "asks before changing anything",
         RunMode::Automatic => "no, changes are applied automatically",
