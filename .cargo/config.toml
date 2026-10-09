@@ -1,0 +1,7 @@
+# Windows: link the C runtime statically so mirror.exe runs on any PC without
+# installing the Visual C++ Redistributable (no VCRUNTIME140.dll needed).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

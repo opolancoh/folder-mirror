@@ -97,12 +97,17 @@ Copy `mirror.example.toml` to `mirror.toml` and use `--profile <name>` (or `--co
 
 Requires Rust (https://rustup.rs).
 
-```bash
-cargo build --release
-```
+Build with the script for your OS. It puts a single, ready-to-copy binary in `dist/`:
 
-The binary is `target/release/mirror` (`mirror.exe` on Windows). Build on each OS for that OS,
-or cross-compile with `--target`. It is a single file; copy it anywhere to use it.
+| OS | Command | Output |
+|---|---|---|
+| Windows | `powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1` | `dist\mirror-<version>-windows-x64.exe` |
+| Linux | `sh scripts/build-release.sh` | `dist/mirror-<version>-linux-x64` |
+| macOS | `sh scripts/build-release.sh` | `dist/mirror-<version>-macos-arm64` |
+
+The binary is the only file you need; copy it anywhere. Everything else under `target/` is
+build cache. On Windows the C runtime is linked in (see `.cargo/config.toml`), so it runs on
+any PC without the Visual C++ Redistributable. Build on each OS to get its binary.
 
 On Windows, use the MSVC toolchain (`rustup default stable-x86_64-pc-windows-msvc`) with the
 Visual Studio Build Tools "Desktop development with C++" workload:
